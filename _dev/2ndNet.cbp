@@ -37,6 +37,11 @@
 			<Add library="SDL2_net" />
 		</Linker>
 		<Unit filename="main.cpp" />
+		<Unit filename="packets.cpp" />
+		<Unit filename="reciever.cpp" />
+		<Unit filename="sender.cpp" />
+		<Unit filename="test/crc32.cpp" />
+		<Unit filename="test/crc32.h" />
 		<Unit filename="zndNet.cpp" />
 		<Unit filename="zndNet.h" />
 		<Unit filename="zndNetPkt.h" />

@@ -8,16 +8,36 @@
 #include <string>
 #include <map>
 
-#define ZNDNET_INBUFF_SIZE   65535
+#define ZNDNET_BUFF_SIZE     4096
 #define ZNDNET_USER_MAX      1024
 #define ZNDNET_USER_NAME_MAX 20
-#define ZNDNET_MAX_MTU       1500
+#define ZNDNET_MAX_MTU       1400
 #define ZNDNET_PKT_UDPSZ     8
 #define ZNDNET_PKT_MAXSZ     (ZNDNET_MAX_MTU - ZNDNET_PKT_UDPSZ)
 #define ZNDNET_PKT_MAXDATSZ  ()
+#define ZNDNET_USER_SCHNLS   2
+#define ZNDNET_SYNC_CHANNELS (ZNDNET_USER_MAX * ZNDNET_USER_SCHNLS)
+
+#define ZNDNET_TUNE_RECV_PKTS    16     // Maximum packets that will be polled at once
+#define ZNDNET_TUNE_SEND_DELAY   1      // millisecond
+#define ZNDNET_TUNE_SEND_MAXDATA 13107  // how many bytes can be sent on this time delay (13107 ~bytes per 1ms on 100Mbit/s)
+
+// High load
+//#define ZNDNET_TUNE_RECV_PKTS    64
+//#define ZNDNET_TUNE_SEND_DELAY   0
+//#define ZNDNET_TUNE_SEND_MAXDATA 131070
+
 
 namespace ZNDNet
 {
+
+enum MODE
+{
+    MODE_UNKNOWN,
+    MODE_SERVER,
+    MODE_CLIENT
+};
+
 enum UIDS
 {
     UID_MASK_ID       = 0x0FFFFFFF,
@@ -46,14 +66,14 @@ enum HDR_OFF
 
     HDR_OFF_SYS_DATA    = 1, //For system short msgs
 
+    HDR_OFF_SEQID       = 1, //SeqID
 
-    HDR_OFF_SEQID       = 1,
+    HDR_OFF_DATA        = 5, //Data position if not multipart
 
-    HDR_OFF_DATA        = 5,
+    HDR_OFF_PART_FSIZE  = 5, //Full data size
+    HDR_OFF_PART_OFFSET = 9, //Offset of this chunk
+    HDR_OFF_PART_DATA   = 13, //Offset of data in multipart
 
-    HDR_OFF_PART_FSIZE  = 5,
-    HDR_OFF_PART_OFFSET = 9,
-    HDR_OFF_PART_DATA   = 13,
 
     HDR_OFF_SYS_MINSZ   = 2,
     HDR_OFF_MINSZ       = 6,
@@ -64,12 +84,21 @@ enum PKT_FLAG
 {
     PKT_FLAG_PART   = 0x1,
     PKT_FLAG_GARANT = 0x2,
-    PKT_FLAG_SYSTEM = 0x80
+    PKT_FLAG_ASYNC  = 0x4,
+    PKT_FLAG_SYSTEM = 0x80,
+
+    PKT_FLAG_MASK_SYSTEM = PKT_FLAG_SYSTEM,
+    PKT_FLAG_MASK_NORMAL = (PKT_FLAG_PART | PKT_FLAG_GARANT | PKT_FLAG_ASYNC)
 };
 
 enum TIMEOUT
 {
     TIMEOUT_PKT = 10000
+};
+
+enum THINGS
+{
+    PKT_NO_CHANNEL = 0xFFFFFFFF
 };
 
 
@@ -118,7 +147,7 @@ struct InRawPkt
     // Fill by parser
     InRawPktHdr hdr;
 
-    InRawPkt(const UDPpacket &pkt);
+    InRawPkt(const UDPpacket *pkt);
     ~InRawPkt();
     bool Parse();
 };
@@ -130,6 +159,9 @@ struct AddrSeq
 {
     IPaddress addr;
     uint32_t seq;
+
+    AddrSeq();
+    AddrSeq(const IPaddress &_addr, uint32_t _seq);
 
     void set(const IPaddress &_addr, uint32_t _seq);
 
@@ -174,27 +206,37 @@ struct Pkt
 
 typedef std::list<InPartedPkt *> PartedList;
 
-class RefData
+struct RefData
 {
-protected:
     uint8_t * data;
     size_t    datasz;
     int32_t   refcnt;
 
     RefData(uint8_t *_data, size_t sz);
-public:
-    static RefData *MakePending(uint8_t *_data, size_t sz);
-    ~RefData() {delete[] data;};
-
-    uint8_t * GetData() {return data;};
-    size_t    GetSize() {return datasz;};
-
-    void Inc() {refcnt++;};
-    void Dec() {refcnt--;};
-
-    int32_t Refs() {return refcnt;};
+    RefData(size_t sz);
+    ~RefData();
 };
 
+struct SendingData
+{
+    AddrSeq  addr;
+    RefData *pdata;
+    size_t   sended;
+    uint8_t  flags;
+
+    uint16_t tr_cnt;
+    uint64_t timeout;
+
+    uint32_t  schnl;  //For sync sending
+
+    SendingData(const AddrSeq &addr, RefData *data, uint8_t flags);
+    SendingData(const IPaddress &addr, uint32_t seq, RefData *data, uint8_t flags);
+    ~SendingData();
+
+    void SetChannel(uint32_t userIDX, uint32_t userChnl = 0);
+};
+
+typedef std::list<SendingData *> SendingList;
 
 
 struct NetUser
@@ -216,22 +258,29 @@ struct NetUser
 
 class ZNDNet
 {
-protected:
-
+// Methods
 public:
     ZNDNet(const std::string &servstring);
 
     void StartServer(uint16_t port);
+    void StartClient(const std::string &name, const IPaddress &addr);
 
 protected:
 
-    void PushInRaw(InRawPkt *inpkt);
-    InRawPkt *PopInRaw();
+    //For receive thread
+    void Recv_PushInRaw(InRawPkt *inpkt);
+    InRawPkt *Recv_PopInRaw();
 
-    Pkt *PreparePacket(InRawPkt *pkt);
+    //For sending thread
+    void Send_PushData();
+
+    Pkt *Recv_PreparePacket(InRawPkt *pkt);
+    Pkt *Recv_ClientPreparePacket(InRawPkt *pkt);
 
     static int _RecvThread(void *data);
-    static int _UpdateThread(void *data);
+    static int _SendThread(void *data);
+    static int _UpdateServerThread(void *data);
+    static int _UpdateClientThread(void *data);
 
     void SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz);
     void SendErrFull(const IPaddress &addr);
@@ -250,9 +299,14 @@ protected:
     uint64_t GenerateID();
     void CorrectName(std::string &_name);
 
+
+
+
+// Data
 public:
 
 protected:
+    int         mode;
     std::string servString;
     UDPsocket   sock;
     uint32_t    seq;
@@ -261,13 +315,23 @@ protected:
     bool        recvThreadEnd;
     SDL_Thread *recvThread;
 
-    InRawList      recvPktList;
+    InRawList   recvPktList;
     SDL_mutex  *recvPktListMutex;
+    ////
+
+    // Sending packets
+    bool        sendThreadEnd;
+    SDL_Thread *sendThread;
+
+    SendingList   sendPktList;
+    SDL_mutex  *sendPktListMutex;
+
+    SendingList   confirmPktList;
+    SDL_mutex  *confirmPktListMutex;
     ////
 
     bool        updateThreadEnd;
     SDL_Thread *updateThread;
-
 
 
     NetUser     users[ZNDNET_USER_MAX];
@@ -277,6 +341,8 @@ protected:
     PartedList  pendingPkt;
 
     Tick64      ttime;
+
+    IPaddress   cServAddress;
 };
 
 };
