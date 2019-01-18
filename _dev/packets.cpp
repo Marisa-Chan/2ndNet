@@ -258,7 +258,7 @@ SendingData::SendingData(const AddrSeq &_addr, RefData *_data, uint8_t _flags)
     schnl = PKT_NO_CHANNEL;
 
     if (pdata)
-        pdata->refcnt++;
+        pdata->link();
 }
 
 SendingData::SendingData(const IPaddress &_addr, uint32_t _seq, RefData *_data, uint8_t _flags)
@@ -274,15 +274,14 @@ SendingData::SendingData(const IPaddress &_addr, uint32_t _seq, RefData *_data, 
     schnl = PKT_NO_CHANNEL;
 
     if (pdata)
-        pdata->refcnt++;
+        pdata->link();
 }
 
 SendingData::~SendingData()
 {
     if (pdata)
     {
-        pdata->refcnt--;
-        if (pdata->refcnt == 0)
+        if (pdata->unlink() == 0)
             delete pdata;
     }
 }

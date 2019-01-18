@@ -122,28 +122,7 @@ uint64_t readU64(const void *src)
 }
 
 
-RefData::RefData(uint8_t *_data, size_t sz)
-{
-    data = new uint8_t[sz];
-    memcpy(data, _data, sz);
-    datasz = sz;
 
-    refcnt = 0;
-}
-
-RefData::RefData(size_t sz)
-{
-    data = new uint8_t[sz];
-    datasz = sz;
-
-    refcnt = 0;
-}
-
-RefData::~RefData()
-{
-    if (data)
-        delete[] data;
-}
 
 
 ZNDNet::ZNDNet(const std::string &servstring)
@@ -178,52 +157,6 @@ ZNDNet::ZNDNet(const std::string &servstring)
 
 
 
-void ZNDNet::StartServer(uint16_t port)
-{
-    mode = MODE_SERVER;
-    sock = SDLNet_UDP_Open(port);
-
-    recvThreadEnd = false;
-    recvThread = SDL_CreateThread(_RecvThread, "", this);
-
-    sendThreadEnd = false;
-    sendThread = SDL_CreateThread(_SendThread, "", this);
-
-    updateThreadEnd = false;
-    updateThread = SDL_CreateThread(_UpdateServerThread, "", this);
-
-}
-
-
-void ZNDNet::StartClient(const std::string &name, const IPaddress &addr)
-{
-    mode = MODE_CLIENT;
-    sock = SDLNet_UDP_Open(0);
-
-    cServAddress = addr;
-
-    recvThreadEnd = false;
-    recvThread = SDL_CreateThread(_RecvThread, "", this);
-
-    sendThreadEnd = false;
-    sendThread = SDL_CreateThread(_SendThread, "", this);
-
-    updateThreadEnd = false;
-    updateThread = SDL_CreateThread(_UpdateClientThread, "", this);
-
-    RefData *rfdata = new RefData(PKT_HANDSHAKE_DATA + servString.size() + name.size());
-    SendingData *dta = new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM);
-
-    rfdata->data[0] = SYS_MSG_HANDSHAKE;
-    rfdata->data[1] = servString.size();
-    rfdata->data[2] = name.size();
-    memcpy(&rfdata->data[3], servString.c_str(), rfdata->data[1]);
-    memcpy(&rfdata->data[3 + rfdata->data[1]], name.c_str(), rfdata->data[2]);
-
-    SDL_LockMutex(sendPktListMutex);
-    sendPktList.push_back(dta);
-    SDL_UnlockMutex(sendPktListMutex);
-}
 
 uint64_t ZNDNet::GenerateID()
 {
@@ -231,118 +164,6 @@ uint64_t ZNDNet::GenerateID()
 }
 
 
-
-
-
-
-int ZNDNet::_UpdateServerThread(void *data)
-{
-    ZNDNet *_this = (ZNDNet *)data;
-
-    while (!_this->updateThreadEnd)
-    {
-        uint64_t forceBrake = _this->ttime.GetTicks() + 10;
-        while (_this->ttime.GetTicks() < forceBrake)
-        {
-            InRawPkt *ipkt = _this->Recv_PopInRaw();
-            if (!ipkt)
-                break; // If no more packets -> do another things
-
-            Pkt * pkt = _this->Recv_PreparePacket(ipkt);
-            if (pkt)
-            {
-
-                delete pkt;
-            }
-        }
-
-        for(int i = 0 ; i < _this->_activeUsersNum; i++)
-        {
-            NetUser *usr = _this->_activeUsers[i];
-            if (usr->latence < 20)
-            {
-                RefData *rfdata = new RefData( (20 - usr->latence) * 10000 + 700 );
-
-                SendingData *dta = new SendingData(usr->addr, _this->seq, rfdata, 0);
-                dta->SetChannel(usr->__idx);
-
-                SDL_LockMutex(_this->sendPktListMutex);
-                _this->sendPktList.push_back(dta);
-                SDL_UnlockMutex(_this->sendPktListMutex);
-                printf("Sended SYNC %d %x\n", _this->seq, crc32(rfdata->data, rfdata->datasz, 0));
-
-
-                for(int j = 1; j < 100; j++)
-                {
-                    dta = new SendingData(usr->addr, j * 20 + _this->seq, rfdata, PKT_FLAG_ASYNC * (j & 1) );
-                    dta->SetChannel(usr->__idx + j);
-
-                    SDL_LockMutex(_this->sendPktListMutex);
-                    _this->sendPktList.push_back(dta);
-                    SDL_UnlockMutex(_this->sendPktListMutex);
-                    printf("Sended ASYNC  %d %x\n", j * 20 + _this->seq, crc32(rfdata->data, rfdata->datasz, 0));
-                }
-
-
-
-
-                /*dta = new SendingData(usr->addr, 20 + _this->seq, rfdata, PKT_FLAG_ASYNC);
-                dta->SetChannel(usr->__idx, 1);
-
-                SDL_LockMutex(_this->sendPktListMutex);
-                _this->sendPktList.push_back(dta);
-                SDL_UnlockMutex(_this->sendPktListMutex);
-                printf("Sended SYNC  %d %x\n", 20 + _this->seq, crc32(rfdata->data, rfdata->datasz, 0));*/
-
-                usr->latence++;
-                _this->seq ++;
-                //SDL_Delay(0);
-            }
-        }
-
-        SDL_Delay(0);
-    }
-
-    return 0;
-}
-
-
-
-int ZNDNet::_UpdateClientThread(void *data)
-{
-    ZNDNet *_this = (ZNDNet *)data;
-    int32_t pkt_recv = 0;
-    while (!_this->updateThreadEnd)
-    {
-        uint64_t forceBrake = _this->ttime.GetTicks() + 10;
-        while (_this->ttime.GetTicks() < forceBrake)
-        {
-            InRawPkt *ipkt = _this->Recv_PopInRaw();
-            if (!ipkt)
-                break; // If no more packets -> do another things
-
-            Pkt * pkt = _this->Recv_ClientPreparePacket(ipkt);
-            if (pkt)
-            {
-                if ((pkt->flags & PKT_FLAG_SYSTEM) == 0)
-                {
-                    pkt_recv++;
-                    if (pkt->flags & PKT_FLAG_ASYNC)
-                        printf("\t\t\tReceive ASYNC %d %x %d\n", pkt->seqid, crc32(pkt->data, pkt->datasz, 0), pkt_recv);
-                    else
-                        printf("\t\t\tReceive SYNC  %d %x %d \n", pkt->seqid, crc32(pkt->data, pkt->datasz, 0), pkt_recv);
-
-                }
-
-                delete pkt;
-            }
-        }
-
-        SDL_Delay(0);
-    }
-
-    return 0;
-}
 
 
 
@@ -475,23 +296,6 @@ void ZNDNet::SendErrFull(const IPaddress &addr)
     buf[HDR_OFF_SYS_DATA] = SYS_MSG_ERRFULL;
 
     SendRaw(addr, buf, sizeof(buf));
-}
-
-void ZNDNet::SendConnected(const NetUser *usr)
-{
-    uint8_t buf[HDR_OFF_SYS_DATA + PKT_CONNECTED_NAME + ZNDNET_USER_NAME_MAX]; // max packet size
-    buf[HDR_OFF_FLAGS]    = PKT_FLAG_SYSTEM;
-    buf[HDR_OFF_SYS_DATA] = SYS_MSG_CONNECTED;
-
-    uint8_t *pkt = &buf[HDR_OFF_SYS_DATA];
-    writeU64(usr->ID, &pkt[PKT_CONNECTED_UID]);
-
-    pkt[PKT_CONNECTED_NAME_SZ] = usr->name.size();
-    memcpy(&pkt[PKT_CONNECTED_NAME], usr->name.c_str(), usr->name.size());
-
-    size_t sz = HDR_OFF_SYS_DATA + PKT_CONNECTED_NAME + usr->name.size();
-
-    SendRaw(usr->addr, buf, sz);
 }
 
 

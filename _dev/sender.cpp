@@ -4,7 +4,14 @@
 namespace ZNDNet
 {
 
-
+void ZNDNet::Send_PushData(SendingData *data)
+{
+    if (SDL_LockMutex(sendPktListMutex) == 0)
+    {
+        sendPktList.push_back(data);
+        SDL_UnlockMutex(sendPktListMutex);
+    }
+}
 
 int ZNDNet::_SendThread(void *data)
 {
@@ -18,7 +25,7 @@ int ZNDNet::_SendThread(void *data)
     if (_this)
     {
         sendBuffer = new uint8_t[ZNDNET_BUFF_SIZE];
-        syncThings = new uint32_t[ZNDNET_SYNC_CHANNELS + 1]; //extra channel for incorrect channels
+        syncThings = new uint32_t[ZNDNET_SYNC_CHANNELS + 1]; // +extra channel for incorrect channels
         memset(syncThings, 0, (ZNDNET_SYNC_CHANNELS + 1) * sizeof(uint32_t));
 
         pkt.data = sendBuffer;
@@ -44,15 +51,14 @@ int ZNDNet::_SendThread(void *data)
 
                 if (dta->flags & PKT_FLAG_SYSTEM)
                 {
-                    if ( dta->pdata->datasz <= (ZNDNET_PKT_MAXSZ - HDR_OFF_SYS_DATA) )
+                    if ( dta->pdata->size() <= (ZNDNET_PKT_MAXSZ - HDR_OFF_SYS_DATA) )
                     {
                         pkt.address = dta->addr.addr;
-                        pkt.len = dta->pdata->datasz + HDR_OFF_SYS_DATA;
+                        pkt.len = dta->pdata->size() + HDR_OFF_SYS_DATA;
                         pkt.maxlen = pkt.len;
                         sendBuffer[HDR_OFF_FLAGS] = PKT_FLAG_SYSTEM;
-                        memcpy(&sendBuffer[HDR_OFF_SYS_DATA], dta->pdata->data, dta->pdata->datasz);
+                        dta->pdata->copy(&sendBuffer[HDR_OFF_SYS_DATA]);
 
-                        //printf("SEND: System sended\n");
                         sendedBytes += pkt.len;
                         SDLNet_UDP_Send(_this->sock, -1, &pkt);
                     }
@@ -73,18 +79,17 @@ int ZNDNet::_SendThread(void *data)
                         if (!async)
                             syncThings[ dta->schnl ] = loop; // Mark this channel has sent data on this loop
 
-                        if ( dta->pdata->datasz <= (ZNDNET_PKT_MAXSZ - HDR_OFF_DATA) ) //Normal MSG by one piece
+                        if ( dta->pdata->size() <= (ZNDNET_PKT_MAXSZ - HDR_OFF_DATA) ) //Normal MSG by one piece
                         {
                             pkt.address = dta->addr.addr;
-                            pkt.len = dta->pdata->datasz + HDR_OFF_DATA;
+                            pkt.len = dta->pdata->size() + HDR_OFF_DATA;
                             pkt.maxlen = pkt.len;
 
                             sendBuffer[HDR_OFF_FLAGS] = dta->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
                             writeU32(dta->addr.seq, &sendBuffer[HDR_OFF_SEQID]);
 
-                            memcpy(&sendBuffer[HDR_OFF_DATA], dta->pdata->data, dta->pdata->datasz);
+                            dta->pdata->copy(&sendBuffer[HDR_OFF_DATA]);
 
-                            //printf("SEND: Normal sended\n");
                             sendedBytes += pkt.len;
                             SDLNet_UDP_Send(_this->sock, -1, &pkt);
 
@@ -108,9 +113,9 @@ int ZNDNet::_SendThread(void *data)
                             else
                                 delete dta;
                         }
-                        else if ( dta->sended < dta->pdata->datasz ) // Multipart
+                        else if ( dta->sended < dta->pdata->size() ) // Multipart
                         {
-                            uint32_t pktdatalen = dta->pdata->datasz - dta->sended;
+                            uint32_t pktdatalen = dta->pdata->size() - dta->sended;
 
                             if ( pktdatalen > (ZNDNET_PKT_MAXSZ - HDR_OFF_PART_DATA) )
                                 pktdatalen = (ZNDNET_PKT_MAXSZ - HDR_OFF_PART_DATA);
@@ -123,18 +128,17 @@ int ZNDNet::_SendThread(void *data)
 
                             writeU32(dta->addr.seq, &sendBuffer[HDR_OFF_SEQID]);
 
-                            writeU32(dta->pdata->datasz, &sendBuffer[HDR_OFF_PART_FSIZE]);
+                            writeU32(dta->pdata->size(), &sendBuffer[HDR_OFF_PART_FSIZE]);
                             writeU32(dta->sended, &sendBuffer[HDR_OFF_PART_OFFSET]);
 
-                            memcpy(&sendBuffer[HDR_OFF_PART_DATA], &dta->pdata->data[dta->sended], pktdatalen);
+                            dta->pdata->copy(&sendBuffer[HDR_OFF_PART_DATA], dta->sended, pktdatalen);
 
-                            //printf("SEND: Multipart(%d) %d/%d sended\n", dta->addr.seq, pktdatalen, (int)dta->pdata->datasz);
                             sendedBytes += pkt.len;
                             SDLNet_UDP_Send(_this->sock, -1, &pkt);
 
                             dta->sended += pktdatalen;
 
-                            if (dta->sended >= dta->pdata->datasz)
+                            if (dta->sended >= dta->pdata->size())
                             {
                                 if ( SDL_LockMutex(_this->sendPktListMutex)  == 0 )
                                 {

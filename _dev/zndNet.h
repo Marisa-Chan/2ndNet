@@ -6,7 +6,7 @@
 #include <SDL2/SDL_net.h>
 #include <list>
 #include <string>
-#include <map>
+#include <deque>
 
 #define ZNDNET_BUFF_SIZE     4096
 #define ZNDNET_USER_MAX      1024
@@ -50,7 +50,9 @@ enum STATUS
 {
     STATUS_DISCONNECTED     = 0,
     STATUS_CONNECTED        = 1,
-    STATUS_JOINED           = 2
+    STATUS_JOINED           = 2,
+
+    STATUS_CLI_CONNECTING   = 3,
 };
 
 enum SYS_MSG
@@ -206,16 +208,78 @@ struct Pkt
 
 typedef std::list<InPartedPkt *> PartedList;
 
-struct RefData
+class RefData
 {
-    uint8_t * data;
-    size_t    datasz;
-    int32_t   refcnt;
+public:
+    inline size_t size() {return _datasz;};
+    inline int32_t unlink() {return --_refcnt;};
+    inline void link() {++_refcnt;};
+    inline int32_t refs() {return _refcnt;};
 
-    RefData(uint8_t *_data, size_t sz);
-    RefData(size_t sz);
-    ~RefData();
+    void copy(void *dst) {copy(dst, 0, _datasz);};
+    void copy(void *dst, size_t nbytes) {copy(dst, 0, nbytes);};
+
+    virtual void copy(void *dst, size_t pos, size_t nbytes) = 0;
+    virtual ~RefData() {};
+
+protected:
+    RefData(): _datasz(0), _refcnt(0) {};
+
+protected:
+    size_t    _datasz;
+    int32_t   _refcnt;
 };
+
+class RefDataStatic: public RefData
+{
+public:
+    inline uint8_t * get() {return _data;};
+
+    virtual void copy(void *dst, size_t pos, size_t nbytes);
+
+    ~RefDataStatic();
+
+    static RefDataStatic *create(size_t sz) {return new RefDataStatic(sz);};
+    static RefDataStatic *create(uint8_t *data, size_t sz) {return new RefDataStatic(data, sz);};
+protected:
+
+    RefDataStatic(uint8_t *data, size_t sz);
+    RefDataStatic(size_t sz);
+
+protected:
+    uint8_t * _data;
+};
+
+class RefDataWStream: public RefData
+{
+public:
+    void write(const void *src, size_t nbytes);
+    void writeU8(uint8_t bt);
+    void writeU32(uint32_t dw);
+    void writeU64(uint64_t qw);
+    void writeStr(const std::string &str);
+    void writeSzStr(const std::string &str);
+
+    virtual void copy(void *dst, size_t pos, size_t nbytes);
+
+    ~RefDataWStream();
+
+    static RefDataWStream *create(uint32_t blocksize = 0x4000) {return new RefDataWStream(blocksize);};
+    static RefDataWStream *create(uint8_t *data, size_t sz, uint32_t blocksize = 0x4000) {return new RefDataWStream(data, sz, blocksize);};
+protected:
+    RefDataWStream(uint32_t blocksize);
+    RefDataWStream(uint8_t *data, size_t sz, uint32_t blocksize);
+
+    void checkfree(size_t nbytes);
+
+protected:
+    typedef std::deque<uint8_t *> _tBlockList;
+
+    _tBlockList    _blocks;
+
+    const uint32_t _blksize;
+};
+
 
 struct SendingData
 {
@@ -272,9 +336,9 @@ protected:
     InRawPkt *Recv_PopInRaw();
 
     //For sending thread
-    void Send_PushData();
+    void Send_PushData(SendingData *data);
 
-    Pkt *Recv_PreparePacket(InRawPkt *pkt);
+    Pkt *Recv_ServerPreparePacket(InRawPkt *pkt);
     Pkt *Recv_ClientPreparePacket(InRawPkt *pkt);
 
     static int _RecvThread(void *data);
@@ -282,9 +346,21 @@ protected:
     static int _UpdateServerThread(void *data);
     static int _UpdateClientThread(void *data);
 
+    void Srv_ProcessSystemPkt(Pkt *pkt);
+    //void Srv_ProcessPkt(Pkt *pkt);
+
+    void Srv_SendConnected(const NetUser *usr);
+
+
+    void Cli_ProcessSystemPkt(Pkt *pkt);
+
+    void Cli_SendConnect();
+
+
+
     void SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz);
     void SendErrFull(const IPaddress &addr);
-    void SendConnected(const NetUser *usr);
+
 
 //    int32_t FindUserIndexByIP(const IPaddress &addr);
     NetUser *FindUserByIP(const IPaddress &addr);
@@ -333,7 +409,6 @@ protected:
     bool        updateThreadEnd;
     SDL_Thread *updateThread;
 
-
     NetUser     users[ZNDNET_USER_MAX];
     NetUser    *_activeUsers[ZNDNET_USER_MAX];
     int32_t     _activeUsersNum;
@@ -342,7 +417,9 @@ protected:
 
     Tick64      ttime;
 
+// Client parts
     IPaddress   cServAddress;
+    NetUser     cME;
 };
 
 };

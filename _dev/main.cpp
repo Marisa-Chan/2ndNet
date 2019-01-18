@@ -15,7 +15,7 @@ int main()
     ZNDNet::ZNDNet * client = new ZNDNet::ZNDNet("TestServer");
 
     serv->StartServer(61234);
-    client->StartClient("zzzz", server);
+    client->StartClient("zzzzzzzzzzzzzzzzzzzzzzzzzzzz", server);
 
 
     sleep(60);
