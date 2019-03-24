@@ -36,12 +36,14 @@ void RefDataStatic::copy(void *dst, size_t pos, size_t nbytes)
 RefDataWStream::RefDataWStream(uint8_t *data, size_t sz, uint32_t blocksize):
     _blksize(blocksize)
 {
+    _pos = 0;
     write(data, sz);
 }
 
 RefDataWStream::RefDataWStream(uint32_t blocksize):
     _blksize(blocksize)
 {
+    _pos = 0;
 }
 
 RefDataWStream::~RefDataWStream()
@@ -52,11 +54,15 @@ RefDataWStream::~RefDataWStream()
 
 void RefDataWStream::checkfree(size_t nbytes)
 {
-    size_t free = _blksize * _blocks.size() - _datasz;
-    while (free < nbytes)
+    int32_t needed = nbytes - (_datasz - _pos);
+    if (needed > 0)
     {
-        _blocks.push_back(new uint8_t[_blksize]);
-        free += _blksize;
+        int32_t free = _blksize * _blocks.size() - _datasz;
+        while (free < needed)
+        {
+            _blocks.push_back(new uint8_t[_blksize]);
+            free += _blksize;
+        }
     }
 }
 
@@ -71,8 +77,8 @@ void RefDataWStream::write(const void *_src, size_t nbytes)
 
     while(nbytes > 0)
     {
-        size_t blkid  = _datasz / _blksize;
-        size_t blkpos = _datasz % _blksize;
+        size_t blkid  = _pos / _blksize;
+        size_t blkpos = _pos % _blksize;
 
         size_t blkfree = _blksize - blkpos;
         size_t tocopy = nbytes;
@@ -84,7 +90,9 @@ void RefDataWStream::write(const void *_src, size_t nbytes)
         memcpy(&dst[blkpos], src, tocopy);
 
         src += tocopy;
-        _datasz += tocopy;
+        _pos += tocopy;
+        if (_pos > _datasz)
+            _datasz = _pos;
         nbytes -= tocopy;
     }
 }
@@ -120,12 +128,15 @@ void RefDataWStream::writeU8(uint8_t bt)
 {
     checkfree(1);
 
-    size_t blkid  = _datasz / _blksize;
-    size_t blkpos = _datasz % _blksize;
+    size_t blkid  = _pos / _blksize;
+    size_t blkpos = _pos % _blksize;
 
     _blocks[blkid][blkpos] = bt;
 
-    _datasz++;
+    _pos++;
+
+    if (_pos > _datasz)
+        _datasz = _pos;
 }
 
 void RefDataWStream::writeU32(uint32_t dw)
@@ -147,13 +158,45 @@ void RefDataWStream::writeU64(uint64_t qw)
 
 void RefDataWStream::writeStr(const std::string &str)
 {
-    write(str.c_str(), str.size());
+    if (str.size())
+        write(str.c_str(), str.size());
 }
 
 void RefDataWStream::writeSzStr(const std::string &str)
 {
     writeU8(str.size());
-    write(str.c_str(), str.size());
+    if (str.size())
+        write(str.c_str(), str.size());
+}
+
+
+bool RefDataWStream::seek(int32_t pos, uint8_t mode)
+{
+    switch(mode)
+    {
+        case 0:
+            break;
+        case 1:
+            pos += _pos;
+            break;
+        case 2:
+            pos += _datasz;
+            break;
+        default:
+            return false;
+            break;
+    }
+
+    if (pos < 0 || pos > (int32_t)_datasz)
+        return false;
+
+    _pos = pos;
+    return true;
+}
+
+size_t RefDataWStream::tell()
+{
+    return _pos;
 }
 
 };

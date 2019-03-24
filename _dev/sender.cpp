@@ -6,6 +6,9 @@ namespace ZNDNet
 
 void ZNDNet::Send_PushData(SendingData *data)
 {
+    if (!data)
+        return;
+
     if (SDL_LockMutex(sendPktListMutex) == 0)
     {
         sendPktList.push_back(data);
@@ -87,6 +90,7 @@ int ZNDNet::_SendThread(void *data)
 
                             sendBuffer[HDR_OFF_FLAGS] = dta->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
                             writeU32(dta->addr.seq, &sendBuffer[HDR_OFF_SEQID]);
+                            sendBuffer[HDR_OFF_CHANNEL] = dta->uchnl;
 
                             dta->pdata->copy(&sendBuffer[HDR_OFF_DATA]);
 
@@ -125,8 +129,8 @@ int ZNDNet::_SendThread(void *data)
                             pkt.maxlen = pkt.len;
 
                             sendBuffer[HDR_OFF_FLAGS] = PKT_FLAG_PART | (dta->flags & PKT_FLAG_MASK_NORMAL);
-
                             writeU32(dta->addr.seq, &sendBuffer[HDR_OFF_SEQID]);
+                            sendBuffer[HDR_OFF_CHANNEL] = dta->uchnl;
 
                             writeU32(dta->pdata->size(), &sendBuffer[HDR_OFF_PART_FSIZE]);
                             writeU32(dta->sended, &sendBuffer[HDR_OFF_PART_OFFSET]);

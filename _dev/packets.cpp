@@ -12,6 +12,7 @@ InRawPktHdr::InRawPktHdr()
     seqid  = 0;
     data   = NULL;
     datasz = 0;
+    uchnl  = PKT_CHNL_NOT_SET;
 }
 
 bool InRawPktHdr::Parse(uint8_t *_data, size_t len)
@@ -42,6 +43,10 @@ bool InRawPktHdr::Parse(uint8_t *_data, size_t len)
             return false;
 
         seqid  = readU32( &_data[HDR_OFF_SEQID] );
+        uchnl  = _data[HDR_OFF_CHANNEL];
+
+        if (uchnl >= ZNDNET_USER_SCHNLS)
+            uchnl = PKT_CHNL_NOT_SET;
 
         if (flags & PKT_FLAG_PART)
         {
@@ -112,7 +117,7 @@ bool InRawPkt::Parse()
 
 
 
-InPartedPkt::InPartedPkt(const AddrSeq& _ipseq, size_t _len, uint8_t _flags)
+InPartedPkt::InPartedPkt(const AddrSeq& _ipseq, size_t _len, uint8_t _flags, uint8_t _channel)
 {
     ipseq = _ipseq;
     timeout = 0;
@@ -120,6 +125,7 @@ InPartedPkt::InPartedPkt(const AddrSeq& _ipseq, size_t _len, uint8_t _flags)
     data = NULL;
     len = 0;
     flags = _flags;
+    uchnl = _channel;
 
     if (_len)
     {
@@ -212,7 +218,9 @@ Pkt::Pkt(InRawPkt *pk, NetUser *usr)
     data = pk->hdr.data;
     datasz = pk->hdr.datasz;
     user = usr;
+    uchnl = pk->hdr.uchnl;
 
+    //Detach data and delete
     pk->data = NULL;
     pk->len = 0;
 
@@ -229,7 +237,9 @@ Pkt::Pkt(InPartedPkt *pk, NetUser *usr)
     data = pk->data;
     datasz = pk->len;
     user = usr;
+    uchnl = pk->uchnl;
 
+    //Detach data and delete
     pk->data = NULL;
     pk->len = 0;
 
@@ -256,6 +266,7 @@ SendingData::SendingData(const AddrSeq &_addr, RefData *_data, uint8_t _flags)
     timeout = 0;
 
     schnl = PKT_NO_CHANNEL;
+    uchnl = PKT_CHNL_NOT_SET;
 
     if (pdata)
         pdata->link();
@@ -272,6 +283,7 @@ SendingData::SendingData(const IPaddress &_addr, uint32_t _seq, RefData *_data, 
     timeout = 0;
 
     schnl = PKT_NO_CHANNEL;
+    uchnl = PKT_CHNL_NOT_SET;
 
     if (pdata)
         pdata->link();
@@ -288,10 +300,16 @@ SendingData::~SendingData()
 
 void SendingData::SetChannel(uint32_t userIDX, uint32_t userChnl)
 {
-    if (userIDX < ZNDNET_USER_MAX && userChnl < ZNDNET_USER_SCHNLS)
+    if (userChnl != PKT_CHNL_NOT_SET && userIDX < ZNDNET_USER_MAX && userChnl < ZNDNET_USER_SCHNLS)
+    {
         schnl = userIDX * ZNDNET_USER_SCHNLS + userChnl;
+        uchnl = userChnl;
+    }
     else
+    {
         schnl = PKT_NO_CHANNEL;
+        uchnl = PKT_CHNL_NOT_SET;
+    }
 }
 
 

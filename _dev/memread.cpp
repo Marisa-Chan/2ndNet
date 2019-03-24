@@ -80,7 +80,7 @@ size_t MemReader::readSzStr(std::string &str)
     uint8_t n = _data[_pos];
     _pos++;
 
-    size_t toread = _size - _pos;
+    int32_t toread = _size - _pos;
     if (toread > n)
         toread = n;
 

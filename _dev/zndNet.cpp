@@ -49,11 +49,23 @@ NetUser::NetUser()
     name = "";
     addr.host = 0;
     addr.port = 0;
-    lastMsgTime = 0;
+
+    lastPingTime = 0;
+    pingSeq = 0;
+    pingLastSeq = 0;
+
     latence = 0;
-    sesID = -1;
+    sesID = 0;
     status = STATUS_DISCONNECTED;
     __idx = -1;
+}
+
+bool NetUser::IsOnline()
+{
+    if (status & STATUS_ONLINE_MASK)
+        return true;
+
+    return false;
 }
 
 
@@ -95,34 +107,6 @@ uint32_t readU32(const void *src)
     return src8[0] | (src8[1] << 8) | (src8[2] << 16) | (src8[3] << 24);
 }
 
-void writeU64(uint64_t u, void *dst)
-{
-    uint8_t *dst8 = (uint8_t *)dst;
-    dst8[0] = u & 0xFF;
-    dst8[1] = (u >> 8) & 0xFF;
-    dst8[2] = (u >> 16) & 0xFF;
-    dst8[3] = (u >> 24) & 0xFF;
-    dst8[4] = (u >> 32) & 0xFF;
-    dst8[5] = (u >> 40) & 0xFF;
-    dst8[6] = (u >> 48) & 0xFF;
-    dst8[7] = (u >> 56) & 0xFF;
-}
-
-uint64_t readU64(const void *src)
-{
-    uint8_t *src8 = (uint8_t *)src;
-    return (uint64_t)src8[0] |
-           ((uint64_t)src8[1] << 8) |
-           ((uint64_t)src8[2] << 16) |
-           ((uint64_t)src8[3] << 24) |
-           ((uint64_t)src8[4] << 32) |
-           ((uint64_t)src8[5] << 40) |
-           ((uint64_t)src8[6] << 48) |
-           ((uint64_t)src8[7] << 56);
-}
-
-
-
 
 
 ZNDNet::ZNDNet(const std::string &servstring)
@@ -130,6 +114,7 @@ ZNDNet::ZNDNet(const std::string &servstring)
     mode = MODE_UNKNOWN;
     servString = servstring;
     seq = 0;
+    seq_d = 0;
 
     updateThreadEnd = true;
     updateThread = NULL;
@@ -151,6 +136,11 @@ ZNDNet::ZNDNet(const std::string &servstring)
     confirmPktListMutex = SDL_CreateMutex();
 
     _activeUsersNum = 0;
+
+    eStatus = 0;
+    cSessionsReqTimeNext = 0;
+
+    eSyncMutex = SDL_CreateMutex();
 }
 
 
@@ -160,7 +150,7 @@ ZNDNet::ZNDNet(const std::string &servstring)
 
 uint64_t ZNDNet::GenerateID()
 {
-    return SDL_GetPerformanceCounter();
+    return 1 + SDL_GetPerformanceCounter();
 }
 
 
@@ -289,6 +279,13 @@ void ZNDNet::SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz)
     }
 }
 
+SendingData *ZNDNet::MkSendingData(NetUser *usr, RefData *data, uint8_t flags, uint32_t chnl)
+{
+    SendingData *dta = new SendingData(usr->addr, GetSeq(), data, flags);
+    dta->SetChannel(usr->__idx, chnl);
+    return dta;
+}
+
 void ZNDNet::SendErrFull(const IPaddress &addr)
 {
     uint8_t buf[HDR_OFF_SYS_MINSZ];
@@ -298,5 +295,13 @@ void ZNDNet::SendErrFull(const IPaddress &addr)
     SendRaw(addr, buf, sizeof(buf));
 }
 
+
+uint32_t ZNDNet::GetSeq()
+{
+    uint32_t cur = seq;
+    seq += PRIMES[seq_d];
+    seq_d = (seq_d + 1) % ZNDNET_PRIMES_CNT;
+    return cur;
+}
 
 };

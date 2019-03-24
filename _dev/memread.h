@@ -1,3 +1,6 @@
+#ifndef ZNDNET_MEMREAD_H_INCLUDED
+#define ZNDNET_MEMREAD_H_INCLUDED
+
 #include <string>
 //Simple reader
 namespace ZNDNet
@@ -28,3 +31,6 @@ protected:
 };
 
 };
+
+
+#endif
