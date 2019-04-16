@@ -119,6 +119,7 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
             break;
 
         default:
+            printf("Client: Getted unk SYS msg %X\n", pkt->data[0]);
             break;
     }
 }
@@ -209,8 +210,9 @@ void ZNDNet::Cli_ProcessRegularPkt(Pkt* pkt)
 
                 for(UserInfoVect::iterator it = cUsers.begin(); it != cUsers.end(); it++)
                 {
-                    if ((*it).ID == UID)
+                    if (it->ID == UID)
                     {
+                        printf("Leaved %s\n", it->name.c_str());
                         cUsers.erase(it);
                         eStatus |= FLAGS_USERS_LIST_UPD;
                         break;
@@ -220,7 +222,7 @@ void ZNDNet::Cli_ProcessRegularPkt(Pkt* pkt)
             break;
 
         default:
-            printf("Client: Getted unk msg %X\n", pkt->data[0]);
+            printf("Client: Getted unk USR msg %X\n", pkt->data[0]);
             break;
     }
 }

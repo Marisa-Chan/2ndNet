@@ -74,6 +74,7 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
 {
     SYS_MSG_HANDSHAKE    = 1,
     SYS_MSG_CONNECTED    = 2,
+    SYS_MSG_DISCONNECT   = 3,
     SYS_MSG_PING         = 5,
     SYS_MSG_LIST_GAMES   = 0x30,
     SYS_MSG_SES_JOIN     = 0x40, //Server->User if joined (or create). User->Server for request for join
@@ -126,8 +127,9 @@ enum PKT_FLAG
 
 enum TIMEOUT
 {
-    TIMEOUT_PKT = 10000,
-    TIMEOUT_SESSION = 60000
+
+    TIMEOUT_SESSION = 60000,
+    TIMEOUT_USER = 15000,
 };
 
 enum
@@ -138,6 +140,9 @@ enum
 
     TIMEOUT_SRV_RECV_MAX = 10,
     TIMEOUT_CLI_RECV_MAX = 3,
+
+    TIMEOUT_GARANT = 10000,
+    TIMEOUT_GARANT_RETRY = 2,
 
     DELAY_SESS_REQ = 5000,
 
@@ -359,14 +364,16 @@ struct NetUser
     uint64_t ID;
     std::string name;
     IPaddress addr;
-    uint32_t latence;
     uint64_t sesID;
     uint8_t status;
 
 
-    uint64_t lastPingTime;
+    uint64_t pingTime;
     uint32_t pingSeq;
-    uint32_t pingLastSeq;
+    uint64_t pongTime;
+    uint32_t pongSeq;
+
+    int32_t latence;
 
 
     int32_t __idx;
@@ -376,6 +383,7 @@ struct NetUser
 };
 
 typedef std::list<NetUser *> NetUserList;
+typedef std::deque<NetUser *> NetUserQueue;
 
 struct NetSession
 {
@@ -450,6 +458,9 @@ protected:
     //For sending thread
     void Send_PushData(SendingData *data);
 
+    void ConfirmQueueCheck();
+    void ReceiveCheck();
+
     Pkt *Recv_ServerPreparePacket(InRawPkt *pkt);
     Pkt *Recv_ClientPreparePacket(InRawPkt *pkt);
 
@@ -458,6 +469,7 @@ protected:
     static int _UpdateServerThread(void *data);
     static int _UpdateClientThread(void *data);
 
+    void Srv_InitUsers();
     void Srv_ProcessSystemPkt(Pkt *pkt);
     void Srv_ProcessRegularPkt(Pkt *pkt);
 
@@ -469,6 +481,9 @@ protected:
     void Srv_SendSessionJoin(const NetUser *usr, NetSession *ses, bool leader);
 
     void Srv_SendPing(const NetUser *usr);
+    void Srv_SendDisconnect(const NetUser *usr);
+
+    void Srv_DisconnectUser(NetUser *usr);
 
     NetSession *Srv_SessionFind(uint64_t _ID);
     NetSession *Srv_SessionFind(const std::string &name);
@@ -503,13 +518,12 @@ protected:
 
 
 //    int32_t FindUserIndexByIP(const IPaddress &addr);
-    NetUser *FindUserByIP(const IPaddress &addr);
-    int32_t FindFreeUser();
+    NetUser *Srv_FindUserByIP(const IPaddress &addr);
 
-    NetUser *FindUserByName(const std::string &_name);
+    NetUser *Srv_AllocUser();
+    void Srv_FreeUser(NetUser *usr);
 
-    void ActivateUser(int32_t idx);
-    void DeactivateUser(int32_t idx);
+    NetUser *Srv_FindUserByName(const std::string &_name);
 
 
     uint64_t GenerateID();
@@ -543,16 +557,17 @@ protected:
     SendingList   sendPktList;
     SDL_mutex  *sendPktListMutex;
 
-    SendingList   confirmPktList;
-    SDL_mutex  *confirmPktListMutex;
+    SendingList   confirmQueue;
+    SDL_mutex  *confirmQueueMutex;
+
     ////
 
     volatile bool updateThreadEnd;
     SDL_Thread *updateThread;
 
-    NetUser     users[ZNDNET_USER_MAX];
-    NetUser    *_activeUsers[ZNDNET_USER_MAX];
-    int32_t     _activeUsersNum;
+    NetUser     *sUsers;
+    NetUserList  sActiveUsers;
+    NetUserQueue sFreeUsers;
 
     PartedList  pendingPkt;
 
@@ -572,7 +587,6 @@ protected:
     uint64_t        cSessionsReqTimeNext;
 
     UserInfoVect    cUsers;
-    //uint64_t        cSessionsReqTimeNext;
 
 // External part
     std::atomic_uint_fast32_t eStatus;

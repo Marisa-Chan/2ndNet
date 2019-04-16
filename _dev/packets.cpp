@@ -166,12 +166,12 @@ bool InPartedPkt::Feed(InRawPkt *pkt, uint64_t timestamp)
 
     if (pkt->hdr.offset == nextOff)
     {
-        timeout = timestamp + TIMEOUT_PKT;
+        timeout = timestamp + TIMEOUT_GARANT;
 
         _Insert(pkt);
         delete pkt;
 
-        if (!parts.empty())
+        if (!parts.empty()) // Check applicability of other parts
         {
             InRawList::iterator it = parts.begin();
             while(it != parts.end())

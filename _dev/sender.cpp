@@ -105,14 +105,18 @@ int ZNDNet::_SendThread(void *data)
 
                             if (dta->flags & PKT_FLAG_GARANT)
                             {
-                                dta->timeout = TIMEOUT_PKT + _this->ttime.GetTicks();
-
-                                if ( SDL_LockMutex(_this->confirmPktListMutex)  == 0 )
+                                if (dta->tr_cnt < TIMEOUT_GARANT_RETRY)
                                 {
-                                    _this->confirmPktList.push_back(dta);
-                                    SDL_UnlockMutex(_this->confirmPktListMutex);
-                                }
+                                    dta->timeout = TIMEOUT_GARANT + _this->ttime.GetTicks();
 
+                                    if ( SDL_LockMutex(_this->confirmQueueMutex)  == 0 )
+                                    {
+                                        _this->confirmQueue.push_back(dta);
+                                        SDL_UnlockMutex(_this->confirmQueueMutex);
+                                    }
+                                }
+                                else
+                                    delete dta;
                             }
                             else
                                 delete dta;
@@ -152,13 +156,18 @@ int ZNDNet::_SendThread(void *data)
 
                                 if (dta->flags & PKT_FLAG_GARANT)
                                 {
-                                    dta->timeout = TIMEOUT_PKT + _this->ttime.GetTicks();
-
-                                    if ( SDL_LockMutex(_this->confirmPktListMutex)  == 0 )
+                                    if (dta->tr_cnt < TIMEOUT_GARANT_RETRY)
                                     {
-                                        _this->confirmPktList.push_back(dta);
-                                        SDL_UnlockMutex(_this->confirmPktListMutex);
+                                        dta->timeout = TIMEOUT_GARANT + _this->ttime.GetTicks();
+
+                                        if ( SDL_LockMutex(_this->confirmQueueMutex)  == 0 )
+                                        {
+                                            _this->confirmQueue.push_back(dta);
+                                            SDL_UnlockMutex(_this->confirmQueueMutex);
+                                        }
                                     }
+                                    else
+                                        delete dta;
                                 }
                                 else
                                     delete dta;

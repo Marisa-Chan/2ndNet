@@ -17,7 +17,7 @@ Pkt *ZNDNet::Recv_ServerPreparePacket(InRawPkt *pkt)
         return NULL;
     }
 
-    NetUser *from = FindUserByIP(pkt->addr);
+    NetUser *from = Srv_FindUserByIP(pkt->addr);
 
     if (pkt->hdr.flags & PKT_FLAG_SYSTEM) // System message
     {
@@ -108,7 +108,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
             CorrectName(nm);
 
-            if (FindUserByName(nm))
+            if (Srv_FindUserByName(nm))
             {
                 if (nm.size() > ZNDNET_USER_NAME_MAX - 5)
                     nm.resize( ZNDNET_USER_NAME_MAX - 5 );
@@ -131,29 +131,26 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                         return;
                     }
                 }
-                while(FindUserByName(nm));
+                while(Srv_FindUserByName(nm));
             }
 
-            int32_t idx = FindFreeUser();
+            NetUser *usr = Srv_AllocUser();
 
-            if (idx == -1) // No free space
+            if (usr == NULL) // No free space
             {
                 SendErrFull(pkt->addr);
                 return;
             }
-
-            NetUser *usr = &users[idx];
             usr->addr = pkt->addr;
-            usr->lastPingTime = ttime.GetTicks();
+            usr->pingTime = ttime.GetTicks();
             usr->pingSeq = 0;
-            usr->pingLastSeq = 0;
+            usr->pongTime = usr->pingTime;
+            usr->pongSeq = 0;
             usr->status = STATUS_CONNECTED;
             usr->ID = GenerateID();
             usr->name = nm;
             usr->latence = 0;
             usr->sesID = 0;
-
-            ActivateUser(idx);
 
             //sLobby.users.push_back(usr);
             //usr->sesID = sLobby.ID;
@@ -246,16 +243,19 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                 {
                     uint32_t seq = rd.readU32();
 
-                    if (seq > pkt->user->pingLastSeq && seq <= pkt->user->pingSeq)
+                    if (seq > pkt->user->pongSeq && seq <= pkt->user->pingSeq)
                     {
-                        pkt->user->pingLastSeq = seq;
+                        pkt->user->pongSeq = seq;
+                        pkt->user->pongTime = ttime.GetTicks();
 
-                        uint32_t latence = (pkt->user->pingSeq - seq) * DELAY_PING + (ttime.GetTicks() - pkt->user->lastPingTime);
+
+                        printf("DBG %d %d %d %d\n", pkt->user->pingSeq, seq, (int)ttime.GetTicks(), (int)pkt->user->pingTime);
+                        int32_t latence = (pkt->user->pingSeq - seq) * DELAY_PING + (ttime.GetTicks() - pkt->user->pingTime);
 
                         if (!pkt->user->latence)
                             pkt->user->latence  = latence;
                         else
-                            pkt->user->latence = latence + (pkt->user->latence - latence) / LATENCE_OLD_PART;
+                            pkt->user->latence = latence + (pkt->user->latence - latence) / (int32_t)LATENCE_OLD_PART;
 
 
                         printf("Srv %s pong %d   latence %d\n", pkt->user->name.c_str(), seq, pkt->user->latence);
@@ -315,9 +315,9 @@ int ZNDNet::_UpdateServerThread(void *data)
                 }
             }
 
-            for(int i = 0 ; i < _this->_activeUsersNum; i++)
+            for(NetUserList::iterator it = _this->sActiveUsers.begin() ; it != _this->sActiveUsers.end(); it++)
             {
-                NetUser *usr = _this->_activeUsers[i];
+                NetUser *usr = *it;
                 if (usr->latence == 0)
                 {
                     RefDataStatic *rfdata = RefDataStatic::create( (20 - usr->latence) * 10000 + 700 );
@@ -352,6 +352,8 @@ void ZNDNet::StartServer(uint16_t port)
 {
     mode = MODE_SERVER;
     sock = SDLNet_UDP_Open(port);
+
+    Srv_InitUsers();
 
     recvThreadEnd = false;
     recvThread = SDL_CreateThread(_RecvThread, "", this);
@@ -482,30 +484,140 @@ void ZNDNet::Srv_SendPing(const NetUser *usr)
     Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
+void ZNDNet::Srv_SendDisconnect(const NetUser *usr)
+{
+    if (!usr)
+        return;
+
+    RefDataWStream *strm = RefDataWStream::create();
+
+    strm->writeU8(SYS_MSG_DISCONNECT);
+
+    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+void ZNDNet::Srv_DisconnectUser(NetUser *usr)
+{
+    if (!usr)
+        return;
+
+    Srv_SendDisconnect(usr); //Send to user disconnect msg
+
+    if (usr->sesID && usr->sesID != sLobby.ID)
+        Srv_SessionUserLeave(usr);
+
+    usr->status = STATUS_DISCONNECTED;
+}
+
 
 void ZNDNet::Srv_InterprocessUpdate()
 {
     uint64_t curTime = ttime.GetTicks();
 
-    for(int32_t i = 0; i < _activeUsersNum; i++)
+    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end();)
     {
-        NetUser *usr = _activeUsers[i];
+        NetUser *usr = *it;
 
-        if (usr->status == STATUS_CONNECTED)
+        if (usr)
         {
-            //Ping
-            if (curTime > usr->lastPingTime + DELAY_PING)
+            if (usr->status == STATUS_CONNECTED)
             {
-                usr->lastPingTime = curTime;
-                usr->pingSeq++;
-                Srv_SendPing(usr);
-            }
+                if (curTime > usr->pongTime + TIMEOUT_USER)
+                {
+                    Srv_DisconnectUser(usr);
 
-        }
+                    it = sActiveUsers.erase(it);
+                    sFreeUsers.push_back(usr);
+
+                    //Disconnect player
+                }
+                else
+                {
+                    //Ping
+                    if (curTime > usr->pingTime + DELAY_PING)
+                    {
+                        usr->pingTime = curTime;
+                        usr->pingSeq++;
+                        Srv_SendPing(usr);
+                    }
+                }
+            }
+        } // if (usr)
+
+        it++;
     }
+
+    ReceiveCheck(); // Delete timeout packets
+    ConfirmQueueCheck();
 
 }
 
 
+void ZNDNet::Srv_InitUsers()
+{
+    sActiveUsers.clear();
+    sFreeUsers.clear();
+
+    if (!sUsers)
+        sUsers = new NetUser[ZNDNET_USER_MAX];
+
+    for(int32_t i = 0; i < ZNDNET_USER_MAX; i++)
+    {
+        NetUser *usr = &sUsers[i];
+        usr->__idx = i;
+
+        sFreeUsers.push_back(usr);
+    }
+}
+
+NetUser *ZNDNet::Srv_FindUserByIP(const IPaddress &addr)
+{
+    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
+    {
+        if ( IPCMP((*it)->addr, addr) )
+            return (*it);
+    }
+
+    return NULL;
+}
+
+NetUser *ZNDNet::Srv_FindUserByName(const std::string &name)
+{
+    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
+    {
+        if ( (*it)->name.size() == name.size() )
+        {
+            if ( strcmp((*it)->name.c_str(), name.c_str()) == 0 )
+                return (*it);
+        }
+    }
+
+    return NULL;
+}
+
+
+NetUser *ZNDNet::Srv_AllocUser()
+{
+    if (sFreeUsers.empty())
+        return NULL;
+
+    NetUser *usr = sFreeUsers.front();
+    sFreeUsers.pop_front();
+
+    sActiveUsers.push_back(usr);
+
+    return usr;
+}
+
+void ZNDNet::Srv_FreeUser(NetUser *usr)
+{
+    if (!usr)
+        return;
+
+    sActiveUsers.remove(usr);
+    sFreeUsers.push_back(usr);
+
+    usr->status = STATUS_DISCONNECTED;
+}
 
 };

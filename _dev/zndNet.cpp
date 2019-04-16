@@ -50,9 +50,10 @@ NetUser::NetUser()
     addr.host = 0;
     addr.port = 0;
 
-    lastPingTime = 0;
+    pingTime = 0;
     pingSeq = 0;
-    pingLastSeq = 0;
+    pongTime = 0;
+    pongSeq = 0;
 
     latence = 0;
     sesID = 0;
@@ -133,14 +134,16 @@ ZNDNet::ZNDNet(const std::string &servstring)
     sendPktListMutex = SDL_CreateMutex();
 
     //confirmPktList.clear();
-    confirmPktListMutex = SDL_CreateMutex();
+    confirmQueueMutex = SDL_CreateMutex();
 
-    _activeUsersNum = 0;
+    sActiveUsers.clear();
 
     eStatus = 0;
     cSessionsReqTimeNext = 0;
 
     eSyncMutex = SDL_CreateMutex();
+
+    sUsers = NULL;
 }
 
 
@@ -159,91 +162,14 @@ uint64_t ZNDNet::GenerateID()
 
 //int32_t ZNDNet::FindUserIndexByIP(const IPaddress &addr)
 //{
-//    for(int32_t i = 0; i < _activeUsersNum; i++)
+//    for(int32_t i = 0; i < sActiveUsersNum; i++)
 //    {
-//        if ( IPCMP(_activeUsers[i]->addr, addr) )
+//        if ( IPCMP(sActiveUsers[i]->addr, addr) )
 //            return i;
 //    }
 //
 //    return -1;
 //}
-
-
-NetUser *ZNDNet::FindUserByIP(const IPaddress &addr)
-{
-    for(int32_t i = 0; i < _activeUsersNum; i++)
-    {
-        if ( IPCMP(_activeUsers[i]->addr, addr) )
-            return _activeUsers[i];
-    }
-
-    return NULL;
-}
-
-int32_t ZNDNet::FindFreeUser()
-{
-    for(int32_t i = 0; i < ZNDNET_USER_MAX; i++)
-    {
-        if (users[i].status == STATUS_DISCONNECTED)
-            return i;
-    }
-
-    return -1;
-}
-
-NetUser *ZNDNet::FindUserByName(const std::string &name)
-{
-    for(int32_t i = 0; i < _activeUsersNum; i++)
-    {
-        if ( _activeUsers[i]->name.size() == name.size() )
-        {
-            if ( strcmp(_activeUsers[i]->name.c_str(), name.c_str()) == 0 )
-                return _activeUsers[i];
-        }
-    }
-
-    return NULL;
-}
-
-
-void ZNDNet::ActivateUser(int32_t idx)
-{
-    if (idx < 0 || idx >= ZNDNET_USER_MAX)
-        return;
-
-    NetUser *usr = &users[idx];
-    usr->__idx = idx;
-
-    for(int32_t i = 0; i < _activeUsersNum; i++)
-    {
-        if (_activeUsers[i] == usr)
-            return; // Don't add user twice
-    }
-
-    _activeUsers[_activeUsersNum] = usr;
-    _activeUsersNum++;
-}
-
-
-void ZNDNet::DeactivateUser(int32_t idx)
-{
-    if (idx < 0 || idx >= ZNDNET_USER_MAX)
-        return;
-
-    NetUser *usr = &users[idx];
-
-    for(int32_t i = 0; i < _activeUsersNum; i++)
-    {
-        //Find this user
-        if (_activeUsers[i] == usr)
-        {
-            _activeUsers[i] = _activeUsers[_activeUsersNum - 1];
-            _activeUsersNum--;
-            return;
-        }
-    }
-}
-
 
 
 void ZNDNet::CorrectName(std::string &name)
@@ -302,6 +228,49 @@ uint32_t ZNDNet::GetSeq()
     seq += PRIMES[seq_d];
     seq_d = (seq_d + 1) % ZNDNET_PRIMES_CNT;
     return cur;
+}
+
+void ZNDNet::ConfirmQueueCheck()
+{
+    uint64_t tcur = ttime.GetTicks();
+
+    for (SendingList::iterator it = confirmQueue.begin(); it != confirmQueue.end(); )
+    {
+        SendingData *dta = *it;
+
+        if (tcur >= dta->timeout)
+        {
+            if ( SDL_LockMutex(confirmQueueMutex) == 0 )
+            {
+                it = confirmQueue.erase(it);
+                SDL_UnlockMutex(confirmQueueMutex);
+
+                dta->tr_cnt++;
+                Send_PushData(dta);
+            }
+        }
+        else
+            it++;
+    }
+}
+
+void ZNDNet::ReceiveCheck()
+{
+    uint64_t tcur = ttime.GetTicks();
+
+    for (PartedList::iterator it = pendingPkt.begin(); it != pendingPkt.end();)
+    {
+        if (tcur >= (*it)->timeout)
+        {
+            InPartedPkt *pkt = *it;
+
+            it = pendingPkt.erase(it);
+
+            delete pkt;
+        }
+        else
+            it++;
+    }
 }
 
 };

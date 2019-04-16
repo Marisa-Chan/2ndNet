@@ -102,8 +102,19 @@ int main(int argc, const char *argv[])
     char cmdbuf[1024];
     while(true)
     {
-        scanf("%s", cmdbuf);
-        printf("%s\n", cmdbuf);
+        fgets(cmdbuf, sizeof(cmdbuf), stdin);
+
+        if (strncasecmp(cmdbuf, "users", 5) == 0)
+        {
+            ZNDNet::UserInfoVect usrs;
+            client->Cli_GetUsers(usrs);
+
+            for(int i = 0; i < usrs.size(); i++)
+            {
+                printf("\tUser list: %s\n", usrs[i].name.c_str());
+            }
+        }
+
     }
 
     sleep(60);
