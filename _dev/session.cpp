@@ -94,7 +94,7 @@ void ZNDNet::Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, 
             NetUser *usr = *it;
             if (usr && usr != from && usr->status != STATUS_DISCONNECTED)
             {
-                SendingData *dta = new SendingData(usr->addr, GetSeq(), dat, flags);
+                SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, flags);
                 dta->SetChannel(usr->__idx, chnl);
                 sendPktList.push_back(dta);
             }
@@ -115,7 +115,7 @@ void ZNDNet::Srv_SessionListUsers(NetUser *usr)
     if (ses && !ses->lobby)
     {
         RefDataWStream *dat = RefDataWStream::create();
-        dat->writeU8(USR_MSG_SES_LIST);
+        dat->writeU8(USR_MSG_SES_USERLIST);
         dat->writeU32(ses->users.size());
 
         for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
@@ -219,7 +219,7 @@ void ZNDNet::Srv_SessionErrSend(NetUser *usr, uint8_t code)
         return;
 
     RefData *msg = Srv_SessionErr(code);
-    SendingData *snd = new SendingData(usr->addr, GetSeq(), msg, PKT_FLAG_SYSTEM);
+    SendingData *snd = new SendingData(usr->addr, usr->GetSeq(), msg, PKT_FLAG_SYSTEM);
     snd->SetChannel(usr->__idx, 0);
     Send_PushData(snd);
 }

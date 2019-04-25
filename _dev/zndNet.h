@@ -21,9 +21,9 @@
 #define ZNDNET_USER_SCHNLS   2          // Minimum 2 (0 - always system synced, 1+ user channels)
 #define ZNDNET_SYNC_CHANNELS (ZNDNET_USER_MAX * ZNDNET_USER_SCHNLS)
 
-#define ZNDNET_TUNE_RECV_PKTS    16     // Maximum packets that will be polled at once
-#define ZNDNET_TUNE_SEND_DELAY   1      // millisecond
-#define ZNDNET_TUNE_SEND_MAXDATA 13107  // how many bytes can be sent on this time delay (13107 ~bytes per 1ms on 100Mbit/s)
+#define ZNDNET_TUNE_RECV_PKTS    32     // Maximum packets that will be polled at once
+#define ZNDNET_TUNE_SEND_DELAY   0      // millisecond
+#define ZNDNET_TUNE_SEND_MAXDATA 128107  // how many bytes can be sent on this time delay (13107 ~bytes per 1ms on 100Mbit/s)
 
 // High load
 //#define ZNDNET_TUNE_RECV_PKTS    64
@@ -76,6 +76,8 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
     SYS_MSG_CONNECTED    = 2,
     SYS_MSG_DISCONNECT   = 3,
     SYS_MSG_PING         = 5,
+    SYS_MSG_DELIVERED    = 7,
+    SYS_MSG_RETRY        = 8,
     SYS_MSG_LIST_GAMES   = 0x30,
     SYS_MSG_SES_JOIN     = 0x40, //Server->User if joined (or create). User->Server for request for join
     SYS_MSG_SES_LEAVE    = 0x41, //User->Server request. Server->User response
@@ -87,10 +89,11 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
 
 enum USR_MSG //For user<->user manipulations and big messages
 {
-    USR_MSG_LIST_GAMES   = 0x30, //Server->User
-    USR_MSG_SES_JOIN     = 0x40, //Broadcasting Server->[users]
-    USR_MSG_SES_LEAVE    = 0x41, //Broadcasting Server->[users]
-    USR_MSG_SES_LIST     = 0x42, //Server->User (list users in session)
+    USR_MSG_DATA          = 0x10,
+    USR_MSG_LIST_GAMES    = 0x30, //Server->User
+    USR_MSG_SES_USERJOIN  = 0x40, //Broadcasting Server->[users]
+    USR_MSG_SES_USERLEAVE = 0x41, //Broadcasting Server->[users]
+    USR_MSG_SES_USERLIST  = 0x42, //Server->User (list users in session)
 };
 
 enum HDR_OFF
@@ -132,6 +135,12 @@ enum TIMEOUT
     TIMEOUT_USER = 15000,
 };
 
+enum CHANNEL
+{
+    CHANNEL_SYS = 0,
+    CHANNEL_USR = 1,
+};
+
 enum
 {
     PKT_CHNL_NOT_SET = 0xFF,
@@ -141,14 +150,36 @@ enum
     TIMEOUT_SRV_RECV_MAX = 10,
     TIMEOUT_CLI_RECV_MAX = 3,
 
-    TIMEOUT_GARANT = 10000,
-    TIMEOUT_GARANT_RETRY = 2,
+    TIMEOUT_PENDING = 10000,
+    TIMEOUT_PENDING_GARANT = 3300,
+    TIMEOUT_GARANT = 15000,
+    TIMEOUT_GARANT_MULTIPART = 3300,
+    RETRY_GARANT = 2,
 
     DELAY_SESS_REQ = 5000,
 
     DELAY_PING = 5000,
 
     LATENCE_OLD_PART = 20,
+
+    EVENTS_MAX = 1000,
+    EVENTS_DATA_MAX = 104857600, //100 Mb for maximum data stored in events
+};
+
+enum
+{
+    EVENT_DISCONNECT,   //On disconnect
+    EVENT_CONNECTED,    //
+    EVENT_LOBBY,        //
+    EVENT_SESSION_LIST, //Sessions list receieved
+    EVENT_SESSION_JOIN, //Success join
+    EVENT_SESSION_FAIL, //Error join or create
+    EVENT_SESSION_KICK,
+    EVENT_SESSION_END,  //
+    EVENT_USER_LIST,
+    EVENT_USER_ADD,
+    EVENT_USER_LEAVE,
+    EVENT_DATA,
 };
 
 
@@ -168,7 +199,7 @@ struct Tick64
 };
 
 
-bool IPCMP(const IPaddress &a, const IPaddress &b);
+
 void writeU32(uint32_t u, void *dst);
 uint32_t readU32(const void *src);
 
@@ -228,12 +259,14 @@ struct InPartedPkt
     size_t    len;
     uint8_t   flags;
     uint8_t   uchnl;
+    uint8_t   retry;
     InRawList parts;
 
     InPartedPkt(const AddrSeq& _ipseq, size_t _len, uint8_t _flags, uint8_t _channel);
     ~InPartedPkt();
     bool Feed(InRawPkt *pkt, uint64_t time);
     void _Insert(InRawPkt *pkt);
+    size_t RetryUpTo();
 };
 
 struct Pkt
@@ -341,6 +374,7 @@ struct SendingData
     AddrSeq  addr;
     RefData *pdata;
     size_t   sended;
+    size_t   retryUpTo;
     uint8_t  flags;
 
     uint16_t tr_cnt;
@@ -375,11 +409,13 @@ struct NetUser
 
     int32_t latence;
 
+    uint32_t seqid;
 
     int32_t __idx;
 
     NetUser();
     bool IsOnline();
+    uint32_t GetSeq();
 };
 
 typedef std::list<NetUser *> NetUserList;
@@ -430,11 +466,49 @@ struct UserInfo
 };
 typedef std::vector<UserInfo> UserInfoVect;
 
+class Event
+{
+public:
+    const uint32_t type;
+    const uint32_t value;
+    uint32_t size;
+    uint32_t __id;
+
+    Event(uint32_t _type, uint32_t _value);
+    virtual ~Event();
+};
+
+class EventNameID: public Event
+{
+public:
+    std::string name;
+    uint64_t id;
+
+    EventNameID(uint32_t _type, uint32_t _value, const std::string &_name, uint64_t _id);
+    virtual ~EventNameID();
+};
+
+class EventData: public Event
+{
+public:
+    uint64_t from;
+    bool     cast;
+    uint64_t to;
+    uint8_t *data;
+    uint8_t  channel;
+
+    EventData(uint32_t _type, uint32_t _value, uint64_t _from, bool _cast, uint64_t _to, uint32_t _sz, uint8_t *_data, uint8_t _channel);
+    virtual ~EventData();
+};
+
+typedef std::list<Event *> EventList;
+
 class ZNDNet
 {
 // Methods
 public:
     ZNDNet(const std::string &servstring);
+    ~ZNDNet();
 
     void StartServer(uint16_t port);
 
@@ -442,12 +516,23 @@ public:
     void StartClient(const std::string &name, const IPaddress &addr);
     uint8_t Cli_GetStatus();
 
+    void Cli_RequestSessions();
+
     bool Cli_GetSessions(SessionInfoVect &dst);
     void Cli_CreateSession(const std::string &name, const std::string &pass, uint32_t max_players);
-    void Cli_JoinSession(uint64_t SID);
+    void Cli_JoinSession(uint64_t SID, const std::string &pass);
+    void Cli_Disconnect();
 
     bool Cli_GetUsers(UserInfoVect &dst);
 
+    void Cli_SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
+    void Cli_BroadcastData(void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
+
+    Event *Events_Pop();
+    void   Events_ClearByType(uint32_t type);
+    void   Events_Clear();
+    Event *Events_PeekByType(uint32_t type);
+    Event *Events_WaitForMsg(uint32_t type, uint32_t time = 0);
 
 protected:
 
@@ -457,9 +542,16 @@ protected:
 
     //For sending thread
     void Send_PushData(SendingData *data);
+    void Send_RetryData(SendingData *data, size_t from = 0, size_t to = 0, bool decr = true);
+    void Send_Clear(const IPaddress &addr);
 
     void ConfirmQueueCheck();
-    void ReceiveCheck();
+    void ConfirmReceive(AddrSeq _seq);
+    void PendingCheck();
+    void ConfirmRetry(AddrSeq _seq, uint32_t from, uint32_t to);
+
+    void Confirm_Clear(const IPaddress &addr);
+    void Pending_Clear(const IPaddress &addr);
 
     Pkt *Recv_ServerPreparePacket(InRawPkt *pkt);
     Pkt *Recv_ClientPreparePacket(InRawPkt *pkt);
@@ -475,15 +567,15 @@ protected:
 
     void Srv_InterprocessUpdate();
 
-    void Srv_SendConnected(const NetUser *usr);
+    void Srv_SendConnected(NetUser *usr);
 
-    void Srv_SendLeaderStatus(const NetUser *usr, bool lead);
-    void Srv_SendSessionJoin(const NetUser *usr, NetSession *ses, bool leader);
+    void Srv_SendLeaderStatus(NetUser *usr, bool lead);
+    void Srv_SendSessionJoin(NetUser *usr, NetSession *ses, bool leader);
 
-    void Srv_SendPing(const NetUser *usr);
-    void Srv_SendDisconnect(const NetUser *usr);
+    void Srv_SendPing(NetUser *usr);
+    void Srv_SendDisconnect(NetUser *usr);
 
-    void Srv_DisconnectUser(NetUser *usr);
+    void Srv_DisconnectUser(NetUser *usr, bool free);
 
     NetSession *Srv_SessionFind(uint64_t _ID);
     NetSession *Srv_SessionFind(const std::string &name);
@@ -500,6 +592,9 @@ protected:
     RefData *Srv_USRDataGenGamesList();
 
 
+    RefData *USRDataGenData(uint64_t from, bool cast, uint64_t to, void *data, uint32_t sz);
+
+
 
     void Cli_ProcessSystemPkt(Pkt *pkt);
     void Cli_ProcessRegularPkt(Pkt *pkt);
@@ -507,18 +602,22 @@ protected:
     void Cli_SendConnect();
     void Cli_RequestGamesList();
 
+    void Cli_InterprocessUpdate();
+
     bool SessionCheckName(const std::string &name);
     bool SessionCheckPswd(const std::string &pswd);
 
     void SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz);
     void SendErrFull(const IPaddress &addr);
 
-
+    void SendDelivered(uint32_t _seqid, const IPaddress &addr);
+    void SendRetry(uint32_t _seqid, const IPaddress &addr, uint32_t nextOff, uint32_t upto);
 
 
 
 //    int32_t FindUserIndexByIP(const IPaddress &addr);
     NetUser *Srv_FindUserByIP(const IPaddress &addr);
+    NetUser *Srv_FindUserByID(uint64_t ID);
 
     NetUser *Srv_AllocUser();
     void Srv_FreeUser(NetUser *usr);
@@ -527,10 +626,16 @@ protected:
 
 
     uint64_t GenerateID();
-    uint32_t GetSeq();
+    //uint32_t GetSeq();
     void CorrectName(std::string &_name);
     SendingData *MkSendingData(NetUser *usr, RefData *data, uint8_t flags, uint32_t chnl = 0);
 
+// Events
+    void Events_Push(Event *evnt);
+
+
+// Utils
+    static bool IPCMP(const IPaddress &a, const IPaddress &b);
 
 // Data
 public:
@@ -539,8 +644,8 @@ protected:
     int         mode;
     std::string servString;
     UDPsocket   sock;
-    uint32_t    seq;
-    uint16_t    seq_d;
+    //uint32_t    seq;
+    //uint16_t    seq_d;
 
     // In Raw packets
     volatile bool recvThreadEnd;
@@ -555,10 +660,12 @@ protected:
     SDL_Thread   *sendThread;
 
     SendingList   sendPktList;
-    SDL_mutex  *sendPktListMutex;
+    SDL_mutex  *sendPktListMutex; //Only for pushing to the end
 
     SendingList   confirmQueue;
     SDL_mutex  *confirmQueueMutex;
+
+    SDL_mutex  *sendModifyMutex; //Massive list changes, stop send iterations.
 
     ////
 
@@ -585,12 +692,21 @@ protected:
 
     SessionInfoVect cSessions;
     uint64_t        cSessionsReqTimeNext;
+    std::atomic_bool cSessionsMakeRequest;
 
     UserInfoVect    cUsers;
 
-// External part
+// External sync
     std::atomic_uint_fast32_t eStatus;
     SDL_mutex  *eSyncMutex;
+
+
+    EventList eEventList;
+    int32_t eEventDataSize;
+    SDL_mutex  *eEventMutex;
+    std::atomic_uint_fast32_t eEventWaitLock;
+    std::atomic_uint_fast32_t eEventNextID;
+
 };
 
 };

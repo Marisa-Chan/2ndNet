@@ -1,6 +1,10 @@
 #include <iostream>
 #include "zndNet.h"
+
 #include <unistd.h>
+#include "Kbhit.h"
+#include "test/crc32.h"
+
 
 #if !defined(SEPARATE_TEST_CLIENT) && !defined(SEPARATE_TEST_SERVER)
 int main()
@@ -24,22 +28,36 @@ int main()
     ZNDNet::SessionInfoVect sessions1;
     ZNDNet::SessionInfoVect sessions2;
 
-    while ( (client->Cli_GetStatus() | client2->Cli_GetStatus() ) & ZNDNet::STATUS_OFFLINE_MASK )
-    {
-        ;
-    }
+    ZNDNet::Event * tmp = client->Events_WaitForMsg(ZNDNet::EVENT_CONNECTED);
+    if (tmp)
+        delete tmp;
 
-    while ( !client->Cli_GetSessions(sessions1) )
-    {
-        ;
-    }
+    tmp = client2->Events_WaitForMsg(ZNDNet::EVENT_CONNECTED);
+    if (tmp)
+        delete tmp;
+
+
+    client->Cli_RequestSessions();
+
+    tmp = client->Events_WaitForMsg(ZNDNet::EVENT_SESSION_LIST);
+    if (tmp)
+        delete tmp;
+
+    client->Cli_GetSessions(sessions1);
 
     printf("cli 1 sessions: %d\n", (int)sessions1.size());
 
     client2->Cli_CreateSession("My sess", "", 0);
 
-    while ( sessions1.size() == 0 )
+
+    while (sessions1.size() == 0)
     {
+        client->Cli_RequestSessions();
+
+        tmp = client->Events_WaitForMsg(ZNDNet::EVENT_SESSION_LIST);
+        if (tmp)
+            delete tmp;
+
         client->Cli_GetSessions(sessions1);
     }
 
@@ -48,12 +66,25 @@ int main()
         printf("cli 1 sessions: %s %d\t %x\n", sessions1[i].name.c_str(), sessions1[i].players, (int)sessions1[i].ID);
     }
 
-    client->Cli_JoinSession( sessions1[0].ID );
+    client->Cli_JoinSession( sessions1[0].ID, "" );
 
+    int cnt = 60;
 
+    while(cnt > 0)
+    {
+        for(ZNDNet::Event *evt = client->Events_Pop(); evt != NULL; evt = client->Events_Pop())
+        {
+            delete evt;
+        }
 
-    sleep(60);
+        for(ZNDNet::Event *evt = client2->Events_Pop(); evt != NULL; evt = client->Events_Pop())
+        {
+            delete evt;
+        }
 
+        cnt--;
+        sleep(1);
+    }
 
     return 0;
 }
@@ -61,6 +92,7 @@ int main()
 
 int main(int argc, const char *argv[])
 {
+
     SDL_Init(0);
     IPaddress server;
     SDLNet_ResolveHost(&server, argv[1], 61234);
@@ -71,53 +103,189 @@ int main(int argc, const char *argv[])
 
     ZNDNet::SessionInfoVect sessions1;
 
-    while ( (client->Cli_GetStatus() ) & ZNDNet::STATUS_OFFLINE_MASK )
-    {
-        ;
-    }
-
-    while ( !client->Cli_GetSessions(sessions1) )
-    {
-        ;
-    }
-
-    if (argc == 4)
-    {
-        client->Cli_CreateSession(argv[3], "", 0);
-    }
-    else if (sessions1.size() == 0)
-    {
-        client->Cli_CreateSession("My sess", "", 0);
-    }
-    else
-    {
-        for(int i = 0; i < (int)sessions1.size(); i++)
-        {
-            printf("sessions: %s \t%d \t %x\n", sessions1[i].name.c_str(), sessions1[i].players, (int)sessions1[i].ID);
-        }
-
-        client->Cli_JoinSession( sessions1[0].ID );
-    }
+    bool run = true;
 
     char cmdbuf[1024];
-    while(true)
+    int32_t ps = 0;
+    bool ses1 = true;
+    while(run)
     {
-        fgets(cmdbuf, sizeof(cmdbuf), stdin);
-
-        if (strncasecmp(cmdbuf, "users", 5) == 0)
+        for(ZNDNet::Event *evt = client->Events_Pop(); evt != NULL; evt = client->Events_Pop())
         {
-            ZNDNet::UserInfoVect usrs;
-            client->Cli_GetUsers(usrs);
-
-            for(int i = 0; i < usrs.size(); i++)
+            switch( evt->type )
             {
-                printf("\tUser list: %s\n", usrs[i].name.c_str());
+                case ZNDNet::EVENT_CONNECTED:
+                    client->Cli_RequestSessions();
+                    break;
+
+                case ZNDNet::EVENT_SESSION_LIST:
+                    client->Cli_GetSessions(sessions1);
+
+                    for(int i = 0; i < (int)sessions1.size(); i++)
+                    {
+                        printf("sessions: %s \t%d \t %x\n", sessions1[i].name.c_str(), sessions1[i].players, (int)sessions1[i].ID);
+                    }
+
+                    if (ses1)
+                    {
+                        if (argc == 4)
+                        {
+                            client->Cli_CreateSession(argv[3], "", 2);
+                        }
+                        else if (sessions1.size() == 0)
+                        {
+                            client->Cli_CreateSession("My sess", "", 0);
+                        }
+                        else
+                        {
+                            client->Cli_JoinSession( sessions1[0].ID, "" );
+                        }
+
+                        ses1 = false;
+                    }
+                    break;
+
+                case ZNDNet::EVENT_SESSION_JOIN:
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+                        printf("Joined to %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                    }
+                    break;
+
+                case ZNDNet::EVENT_DATA:
+                    {
+                        ZNDNet::EventData *dat = (ZNDNet::EventData *)evt;
+                        printf("Recieve data sz %d from %x, crc %x\n", dat->size, (uint32_t)dat->from, crc32(dat->data, dat->size, 0) );
+
+                    }
+                    break;
+
+                case ZNDNet::EVENT_USER_ADD:
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+                        printf("Joined user %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                    }
+                    break;
+
+                case ZNDNet::EVENT_USER_LEAVE:
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+                        printf("Joined user %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+            delete evt;
+        }
+
+        if (kbhit())
+        {
+            int c = getch();
+
+            if (c != 0)
+            {
+                if (c == '\n')
+                {
+                    printf("ENTER\n");
+                    cmdbuf[ps] = 0;
+
+                    if (strncasecmp(cmdbuf, "users", 5) == 0)
+                    {
+                        ZNDNet::UserInfoVect usrs;
+                        client->Cli_GetUsers(usrs);
+
+                        for(int i = 0; i < usrs.size(); i++)
+                        {
+                            printf("\tUser list: %s\n", usrs[i].name.c_str());
+                        }
+                    }
+                    else if (strncasecmp(cmdbuf, "sessions", 8) == 0)
+                    {
+                        client->Cli_RequestSessions();
+                    }
+                    else if (strncasecmp(cmdbuf, "create", 6) == 0)
+                    {
+                        std::string str = cmdbuf + 7;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        client->Cli_CreateSession(str.c_str(), "", 0);
+                    }
+                    else if (strncasecmp(cmdbuf, "join", 4) == 0)
+                    {
+                        std::string str = cmdbuf + 5;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        for(int i = 0; i < (int)sessions1.size(); i++)
+                        {
+                            if (strcasecmp(sessions1[i].name.c_str(), str.c_str()) == 0)
+                            {
+                                client->Cli_JoinSession(sessions1[i].ID, "");
+                                break;
+                            }
+                        }
+                    }
+                    else if (strncasecmp(cmdbuf, "quit", 4) == 0)
+                    {
+                        run = false;
+                    }
+                    else if (strncasecmp(cmdbuf, "cast", 4) == 0)
+                    {
+                        uint8_t *tmp = new uint8_t[1024];
+                        for (int32_t i = 0; i < 1024; i++)
+                            tmp[i] = rand() % 0xFF;
+
+                        client->Cli_BroadcastData(tmp, 1024);
+                        printf("Sended data %x\n", crc32(tmp, 1024, 0) );
+
+                        delete[] tmp;
+                    }
+                    else if (strncasecmp(cmdbuf, "uni", 3) == 0)
+                    {
+                        std::string str = cmdbuf + 4;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        ZNDNet::UserInfoVect usrs;
+                        client->Cli_GetUsers(usrs);
+
+                        for(int i = 0; i < usrs.size(); i++)
+                        {
+                            if ( strcasecmp( usrs[i].name.c_str(), str.c_str()) == 0 )
+                            {
+                                uint8_t *tmp = new uint8_t[1024];
+                                for (int32_t i = 0; i < 1024; i++)
+                                    tmp[i] = rand() % 0xFF;
+
+                                client->Cli_SendData(usrs[i].ID, tmp, 1024);
+                                printf("Sended data to %s crc %x\n", usrs[i].name.c_str(), crc32(tmp, 1024, 0) );
+
+                                delete[] tmp;
+                                break;
+                            }
+                        }
+                    }
+
+                    ps = 0;
+                }
+                else
+                {
+                    cmdbuf[ps++] = c;
+                }
             }
         }
 
+
+        SDL_Delay(10);
+
     }
 
-    sleep(60);
+    client->Cli_Disconnect();
+
+    sleep(4);
 
 
     return 0;

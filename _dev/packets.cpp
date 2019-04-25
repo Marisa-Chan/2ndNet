@@ -126,6 +126,7 @@ InPartedPkt::InPartedPkt(const AddrSeq& _ipseq, size_t _len, uint8_t _flags, uin
     len = 0;
     flags = _flags;
     uchnl = _channel;
+    retry = RETRY_GARANT;
 
     if (_len)
     {
@@ -166,7 +167,10 @@ bool InPartedPkt::Feed(InRawPkt *pkt, uint64_t timestamp)
 
     if (pkt->hdr.offset == nextOff)
     {
-        timeout = timestamp + TIMEOUT_GARANT;
+        if (pkt->hdr.flags & PKT_FLAG_GARANT)
+            timeout = timestamp + TIMEOUT_PENDING_GARANT; // For retry
+        else
+            timeout = timestamp + TIMEOUT_PENDING;
 
         _Insert(pkt);
         delete pkt;
@@ -200,6 +204,21 @@ bool InPartedPkt::Feed(InRawPkt *pkt, uint64_t timestamp)
     }
 
     return nextOff >= len;
+}
+
+size_t InPartedPkt::RetryUpTo()
+{
+    size_t tmp = len;
+    for(InRawList::iterator it = parts.begin(); it != parts.end(); it++)
+    {
+        InRawPkt *pkt = *it;
+        tmp = std::min((size_t)pkt->hdr.offset, tmp);
+    }
+
+    if (tmp > nextOff)
+        return tmp;
+
+    return 0;
 }
 
 
@@ -262,7 +281,8 @@ SendingData::SendingData(const AddrSeq &_addr, RefData *_data, uint8_t _flags)
     flags = _flags;
 
     sended = 0;
-    tr_cnt = 0;
+    retryUpTo = 0;
+    tr_cnt = RETRY_GARANT;
     timeout = 0;
 
     schnl = PKT_NO_CHANNEL;
@@ -279,7 +299,8 @@ SendingData::SendingData(const IPaddress &_addr, uint32_t _seq, RefData *_data, 
     flags = _flags;
 
     sended = 0;
-    tr_cnt = 0;
+    retryUpTo = 0;
+    tr_cnt = RETRY_GARANT;
     timeout = 0;
 
     schnl = PKT_NO_CHANNEL;

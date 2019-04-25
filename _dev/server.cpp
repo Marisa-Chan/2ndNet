@@ -49,6 +49,8 @@ Pkt *ZNDNet::Recv_ServerPreparePacket(InRawPkt *pkt)
 
             if ( parted->Feed(pkt, ttime.GetTicks()) ) // Is complete?
             {
+                if (parted->retry != RETRY_GARANT)
+                    printf("Recovered packet! %d\n", parted->ipseq.seq);
                 pendingPkt.remove(parted);
                 return new Pkt(parted, from);
             }
@@ -73,7 +75,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
     if (!pkt)
         return;
 
-    if (pkt->datasz < 2 )
+    if (pkt->datasz < 1 )
         return;
 
     MemReader rd(pkt->data + 1, pkt->datasz - 1);
@@ -171,7 +173,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                         return;
 
                     RefData *msg = Srv_USRDataGenGamesList();
-                    SendingData *dat = new SendingData(pkt->user->addr, GetSeq(), msg, PKT_FLAG_ASYNC);
+                    SendingData *dat = new SendingData(pkt->user->addr, pkt->user->GetSeq(), msg, PKT_FLAG_ASYNC);
                     dat->SetChannel(pkt->user->__idx, 0);
                     Send_PushData(dat);
                 }
@@ -220,15 +222,31 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                 break;
 
             case SYS_MSG_SES_JOIN:
-                if (rd.size() == 8 )
+                if (rd.size() > 8 )
                 {
                     uint64_t SID = rd.readU64();
+                    std::string pss;
+                    rd.readSzStr(pss);
+
                     NetSession *ses = Srv_SessionFind(SID);
                     if (!ses)
                     {
                         Srv_SessionErrSend(pkt->user, ERR_SES_JOIN);
                         return;
                     }
+
+                    if (ses->max_players > 0 && ses->users.size() >= ses->max_players)
+                    {
+                        Srv_SessionErrSend(pkt->user, ERR_SES_JOIN);
+                        return;
+                    }
+
+                    if (ses->password.size() > 0 && ses->password != pss)
+                    {
+                        Srv_SessionErrSend(pkt->user, ERR_SES_JOIN);
+                        return;
+                    }
+
                     Srv_DoSessionUserJoin(pkt->user, ses);
                 }
                 else
@@ -248,8 +266,6 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                         pkt->user->pongSeq = seq;
                         pkt->user->pongTime = ttime.GetTicks();
 
-
-                        printf("DBG %d %d %d %d\n", pkt->user->pingSeq, seq, (int)ttime.GetTicks(), (int)pkt->user->pingTime);
                         int32_t latence = (pkt->user->pingSeq - seq) * DELAY_PING + (ttime.GetTicks() - pkt->user->pingTime);
 
                         if (!pkt->user->latence)
@@ -260,6 +276,31 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
                         printf("Srv %s pong %d   latence %d\n", pkt->user->name.c_str(), seq, pkt->user->latence);
                     }
+                }
+                break;
+
+            case SYS_MSG_DELIVERED:
+                if (rd.size() == 4)
+                {
+                    uint32_t seq = rd.readU32();
+                    ConfirmReceive( AddrSeq(pkt->addr, seq) );
+                }
+                break;
+
+            case SYS_MSG_RETRY:
+                if (rd.size() == 12)
+                {
+                    uint32_t seq = rd.readU32();
+                    uint32_t from = rd.readU32();
+                    uint32_t upto = rd.readU32();
+                    ConfirmRetry( AddrSeq(pkt->addr, seq), from, upto );
+                }
+                break;
+
+            case SYS_MSG_DISCONNECT:
+                {
+                    printf("Disconnect request player %s\n", pkt->user->name.c_str());
+                    Srv_DisconnectUser(pkt->user, true);
                 }
                 break;
 
@@ -274,13 +315,48 @@ void ZNDNet::Srv_ProcessRegularPkt(Pkt* pkt)
     if (!pkt || !pkt->user)
         return;
 
-    if (pkt->datasz < 2 )
+    if (pkt->datasz < 1 )
         return;
 
     MemReader rd(pkt->data + 1, pkt->datasz - 1);
 
     switch(pkt->data[0])
     {
+        case USR_MSG_DATA:
+            if (rd.size() > 21)
+            {
+                uint64_t from = rd.readU64();
+                uint8_t  cast = rd.readU8();
+                uint64_t to = rd.readU64();
+                uint32_t sz = rd.readU32();
+
+                if (rd.size() == sz + rd.tell() && from == pkt->user->ID)
+                {
+                    if ( cast == 0 )
+                    {
+                        NetUser *usr = Srv_FindUserByID(to);
+                        if (usr)
+                        {
+                            RefData *dat = USRDataGenData(from, false, to, pkt->data + 1 + rd.tell(), sz);
+                            SendingData *snd = new SendingData(usr->addr, usr->GetSeq(), dat, pkt->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC));
+                            snd->SetChannel(usr->__idx, pkt->uchnl);
+                            Send_PushData(snd);
+                        }
+                    }
+                    else if ( cast == 1 )
+                    {
+                        NetSession *ses = Srv_SessionFind(to);
+                        if (ses)
+                        {
+                            RefData *dat = USRDataGenData(from, true, to, pkt->data + 1 + rd.tell(), sz);
+                            Srv_SessionBroadcast(ses, dat,  pkt->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC),  pkt->uchnl, pkt->user);
+                        }
+                    }
+
+                }
+            }
+            break;
+
         default:
             break;
     }
@@ -309,29 +385,15 @@ int ZNDNet::_UpdateServerThread(void *data)
                     if (pkt->flags & PKT_FLAG_SYSTEM)
                         _this->Srv_ProcessSystemPkt(pkt);
                     else
+                    {
+                        if (pkt->flags & PKT_FLAG_GARANT)
+                            _this->SendDelivered(pkt->seqid, pkt->addr);
+
                         _this->Srv_ProcessRegularPkt(pkt);
+                    }
+
 
                     delete pkt;
-                }
-            }
-
-            for(NetUserList::iterator it = _this->sActiveUsers.begin() ; it != _this->sActiveUsers.end(); it++)
-            {
-                NetUser *usr = *it;
-                if (usr->latence == 0)
-                {
-                    RefDataStatic *rfdata = RefDataStatic::create( (20 - usr->latence) * 10000 + 700 );
-                    rfdata->get()[0] = 0xFF;
-
-                    SendingData *dta = new SendingData(usr->addr, _this->seq, rfdata, 0);
-                    dta->SetChannel(usr->__idx, usr->latence % 2);
-
-                    _this->Send_PushData(dta);
-                    printf("Sended SYNC to user %d seq %d %x chnl %d\n", usr->__idx, _this->seq, crc32(rfdata->get(), rfdata->size(), 0), usr->latence % 2);
-
-                    usr->latence++;
-                    _this->seq ++;
-                    //SDL_Delay(0);
                 }
             }
 
@@ -340,8 +402,7 @@ int ZNDNet::_UpdateServerThread(void *data)
             SDL_UnlockMutex(_this->eSyncMutex);
         }
 
-
-        SDL_Delay(0);
+        SDL_Delay(1);
     }
 
     return 0;
@@ -372,7 +433,7 @@ void ZNDNet::StartServer(uint16_t port)
 
 
 
-void ZNDNet::Srv_SendConnected(const NetUser *usr)
+void ZNDNet::Srv_SendConnected(NetUser *usr)
 {
     if (!usr)
         return;
@@ -386,7 +447,7 @@ void ZNDNet::Srv_SendConnected(const NetUser *usr)
     Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
-void ZNDNet::Srv_SendLeaderStatus(const NetUser *usr, bool lead)
+void ZNDNet::Srv_SendLeaderStatus(NetUser *usr, bool lead)
 {
     if (!usr)
         return;
@@ -395,12 +456,12 @@ void ZNDNet::Srv_SendLeaderStatus(const NetUser *usr, bool lead)
     dat->writeU8(SYS_MSG_SES_LEAD);
     dat->writeU8(lead ? 1 : 0);
 
-    SendingData *dta = new SendingData(usr->addr, GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
+    SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
     dta->SetChannel(usr->__idx, 0);
     Send_PushData(dta);
 }
 
-void ZNDNet::Srv_SendSessionJoin(const NetUser *usr, NetSession *ses, bool leader)
+void ZNDNet::Srv_SendSessionJoin(NetUser *usr, NetSession *ses, bool leader)
 {
     if (!usr || !ses)
         return;
@@ -411,7 +472,7 @@ void ZNDNet::Srv_SendSessionJoin(const NetUser *usr, NetSession *ses, bool leade
     dat->writeU64(ses->ID);
     dat->writeSzStr(ses->name);
 
-    SendingData *dta = new SendingData(usr->addr, GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
+    SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
     dta->SetChannel(usr->__idx, 0);
     Send_PushData(dta);
 }
@@ -425,7 +486,7 @@ RefData *ZNDNet::Srv_USRDataGenUserLeave(NetUser *usr)
         return NULL;
 
     RefDataWStream *dat = RefDataWStream::create();
-    dat->writeU8(USR_MSG_SES_LEAVE);
+    dat->writeU8(USR_MSG_SES_USERLEAVE);
     dat->writeU64(usr->ID);
     return dat;
 }
@@ -436,7 +497,7 @@ RefData *ZNDNet::Srv_USRDataGenUserJoin(NetUser *usr)
         return NULL;
 
     RefDataWStream *dat = RefDataWStream::create();
-    dat->writeU8(USR_MSG_SES_JOIN);
+    dat->writeU8(USR_MSG_SES_USERJOIN);
     dat->writeU64(usr->ID);
     dat->writeSzStr(usr->name);
     return dat;
@@ -463,7 +524,7 @@ RefData *ZNDNet::Srv_USRDataGenGamesList()
     }
 
     dat->seek(1, 0);
-    dat->writeU32(opened);
+    dat->writeU32(opened); //rewrite sessions.size()
 
     dat->seek(0, 2);
 
@@ -471,7 +532,7 @@ RefData *ZNDNet::Srv_USRDataGenGamesList()
 }
 
 
-void ZNDNet::Srv_SendPing(const NetUser *usr)
+void ZNDNet::Srv_SendPing(NetUser *usr)
 {
     if (!usr)
         return;
@@ -484,7 +545,7 @@ void ZNDNet::Srv_SendPing(const NetUser *usr)
     Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
-void ZNDNet::Srv_SendDisconnect(const NetUser *usr)
+void ZNDNet::Srv_SendDisconnect(NetUser *usr)
 {
     if (!usr)
         return;
@@ -496,10 +557,14 @@ void ZNDNet::Srv_SendDisconnect(const NetUser *usr)
     Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
-void ZNDNet::Srv_DisconnectUser(NetUser *usr)
+void ZNDNet::Srv_DisconnectUser(NetUser *usr, bool free)
 {
     if (!usr)
         return;
+
+    Send_Clear(usr->addr);
+    Confirm_Clear(usr->addr);
+    Pending_Clear(usr->addr);
 
     Srv_SendDisconnect(usr); //Send to user disconnect msg
 
@@ -507,6 +572,12 @@ void ZNDNet::Srv_DisconnectUser(NetUser *usr)
         Srv_SessionUserLeave(usr);
 
     usr->status = STATUS_DISCONNECTED;
+
+    if (free)
+    {
+        sActiveUsers.remove(usr);
+        sFreeUsers.push_back(usr);
+    }
 }
 
 
@@ -524,7 +595,8 @@ void ZNDNet::Srv_InterprocessUpdate()
             {
                 if (curTime > usr->pongTime + TIMEOUT_USER)
                 {
-                    Srv_DisconnectUser(usr);
+                    printf("Timeout player %s\n", usr->name.c_str());
+                    Srv_DisconnectUser(usr, false);
 
                     it = sActiveUsers.erase(it);
                     sFreeUsers.push_back(usr);
@@ -547,7 +619,7 @@ void ZNDNet::Srv_InterprocessUpdate()
         it++;
     }
 
-    ReceiveCheck(); // Delete timeout packets
+    PendingCheck(); // Delete timeout packets
     ConfirmQueueCheck();
 
 }
@@ -575,6 +647,17 @@ NetUser *ZNDNet::Srv_FindUserByIP(const IPaddress &addr)
     for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
     {
         if ( IPCMP((*it)->addr, addr) )
+            return (*it);
+    }
+
+    return NULL;
+}
+
+NetUser *ZNDNet::Srv_FindUserByID(uint64_t ID)
+{
+    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
+    {
+        if ( (*it)->ID == ID )
             return (*it);
     }
 
