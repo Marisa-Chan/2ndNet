@@ -11,6 +11,8 @@
 #include <atomic>
 #include <unordered_map>
 
+#include "errcode.h"
+
 #define ZNDNET_BUFF_SIZE     4096
 #define ZNDNET_USER_MAX      1024
 #define ZNDNET_USER_NAME_MAX 20
@@ -84,7 +86,7 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
     SYS_MSG_SES_LEAD     = 0x42, //Server->User
     SYS_MSG_SES_CREATE   = 0x43, //User->Server
     SYS_MSG_SES_ERR      = 0x4F,
-    SYS_MSG_ERRFULL      = 0xFF
+    SYS_MSG_CONNERR      = 0x81,
 };
 
 enum USR_MSG //For user<->user manipulations and big messages
@@ -132,7 +134,6 @@ enum TIMEOUT
 {
 
     TIMEOUT_SESSION = 60000,
-    TIMEOUT_USER = 15000,
 };
 
 enum CHANNEL
@@ -154,6 +155,10 @@ enum
     TIMEOUT_PENDING_GARANT = 3300,
     TIMEOUT_GARANT = 15000,
     TIMEOUT_GARANT_MULTIPART = 3300,
+
+    TIMEOUT_CONNECT = 10000,
+    TIMEOUT_USER = 15000,
+
     RETRY_GARANT = 2,
 
     DELAY_SESS_REQ = 5000,
@@ -170,6 +175,7 @@ enum
 {
     EVENT_DISCONNECT,   //On disconnect
     EVENT_CONNECTED,    //
+    EVENT_CONNERR,
     EVENT_LOBBY,        //
     EVENT_SESSION_LIST, //Sessions list receieved
     EVENT_SESSION_JOIN, //Success join
@@ -533,6 +539,7 @@ public:
     void   Events_Clear();
     Event *Events_PeekByType(uint32_t type);
     Event *Events_WaitForMsg(uint32_t type, uint32_t time = 0);
+    void   Stop(); // Don't call it from threads!
 
 protected:
 
@@ -607,9 +614,6 @@ protected:
     bool SessionCheckName(const std::string &name);
     bool SessionCheckPswd(const std::string &pswd);
 
-    void SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz);
-    void SendErrFull(const IPaddress &addr);
-
     void SendDelivered(uint32_t _seqid, const IPaddress &addr);
     void SendRetry(uint32_t _seqid, const IPaddress &addr, uint32_t nextOff, uint32_t upto);
 
@@ -623,7 +627,7 @@ protected:
     void Srv_FreeUser(NetUser *usr);
 
     NetUser *Srv_FindUserByName(const std::string &_name);
-
+    void Srv_SendConnErr(const IPaddress &addr, uint8_t type);
 
     uint64_t GenerateID();
     //uint32_t GetSeq();
@@ -647,8 +651,8 @@ protected:
     //uint32_t    seq;
     //uint16_t    seq_d;
 
+    volatile bool threadsEnd; //Run threads
     // In Raw packets
-    volatile bool recvThreadEnd;
     SDL_Thread   *recvThread;
 
     InRawList   recvPktList;
@@ -656,7 +660,6 @@ protected:
     ////
 
     // Sending packets
-    volatile bool sendThreadEnd;
     SDL_Thread   *sendThread;
 
     SendingList   sendPktList;
@@ -669,7 +672,6 @@ protected:
 
     ////
 
-    volatile bool updateThreadEnd;
     SDL_Thread *updateThread;
 
     NetUser     *sUsers;
@@ -686,9 +688,11 @@ protected:
 
 // Client parts
     IPaddress   cServAddress;
+    bool        cServHasLobby;
     NetUser     cME;
     bool        cLeader;
     std::string cJoinedSessionName;
+    uint64_t    cTimeOut;
 
     SessionInfoVect cSessions;
     uint64_t        cSessionsReqTimeNext;

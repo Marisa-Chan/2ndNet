@@ -158,20 +158,14 @@ ZNDNet::ZNDNet(const std::string &servstring)
     mode = MODE_UNKNOWN;
     servString = servstring;
 
-    updateThreadEnd = true;
+    threadsEnd = true;
+
     updateThread = NULL;
 
-    recvThreadEnd = true;
     recvThread = NULL;
-
-    //recvPktList.clear();
     recvPktListMutex = SDL_CreateMutex();
 
-
-    sendThreadEnd = true;
     sendThread = NULL;
-
-    //sendPktList.clear();
     sendPktListMutex = SDL_CreateMutex();
 
     //confirmPktList.clear();
@@ -192,6 +186,8 @@ ZNDNet::ZNDNet(const std::string &servstring)
     eEventWaitLock = 0;
 
     sendModifyMutex = SDL_CreateMutex();
+
+    cME.status = STATUS_DISCONNECTED;
 }
 
 ZNDNet::~ZNDNet()
@@ -241,37 +237,11 @@ void ZNDNet::CorrectName(std::string &name)
 }
 
 
-void ZNDNet::SendRaw(const IPaddress &addr, const uint8_t *data, size_t sz)
-{
-    UDPpacket outpkt;
-
-    if (data && sz < ZNDNET_PKT_MAXSZ && sz >= 0)
-    {
-        outpkt.address = addr;
-        outpkt.channel = -1;
-        outpkt.len = sz;
-        outpkt.maxlen = sz;
-        outpkt.data = (uint8_t *)data;
-
-        SDLNet_UDP_Send(sock, -1, &outpkt);
-
-    }
-}
-
 SendingData *ZNDNet::MkSendingData(NetUser *usr, RefData *data, uint8_t flags, uint32_t chnl)
 {
     SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), data, flags);
     dta->SetChannel(usr->__idx, chnl);
     return dta;
-}
-
-void ZNDNet::SendErrFull(const IPaddress &addr)
-{
-    uint8_t buf[HDR_OFF_SYS_MINSZ];
-    buf[HDR_OFF_FLAGS]    = PKT_FLAG_SYSTEM;
-    buf[HDR_OFF_SYS_DATA] = SYS_MSG_ERRFULL;
-
-    SendRaw(addr, buf, sizeof(buf));
 }
 
 
@@ -671,6 +641,16 @@ RefData *ZNDNet::USRDataGenData(uint64_t from, bool cast, uint64_t to, void *dat
     rfdat->writeU32(sz);
     rfdat->write(data, sz);
     return rfdat;
+}
+
+void ZNDNet::Stop()
+{
+    if (updateThread)
+    {
+        threadsEnd = true;
+        SDL_WaitThread(updateThread, NULL);
+        updateThread = NULL;
+    }
 }
 
 };

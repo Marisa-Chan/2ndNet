@@ -22,7 +22,7 @@ int ZNDNet::_RecvThread(void *data)
 
         inpkt[ZNDNET_TUNE_RECV_PKTS] = NULL;
 
-        while (!_this->recvThreadEnd)
+        while (!_this->threadsEnd)
         {
             int numrecv = SDLNet_UDP_RecvV(_this->sock, inpkt);
 

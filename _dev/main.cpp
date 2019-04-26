@@ -115,7 +115,28 @@ int main(int argc, const char *argv[])
             switch( evt->type )
             {
                 case ZNDNet::EVENT_CONNECTED:
-                    client->Cli_RequestSessions();
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+
+                        printf("Connected as %s ID(%x) lobby(%d)\n", dat->name.c_str(), (uint32_t)dat->id, dat->value );
+                        client->Cli_RequestSessions();
+                    }
+                    break;
+
+                case ZNDNet::EVENT_CONNERR:
+                    {
+                        printf("Err connecting %d\n", evt->value);
+                        client->Stop();
+                        run = false;
+                    }
+                    break;
+
+                case ZNDNet::EVENT_DISCONNECT:
+                    {
+                        printf("Err disconnect %d\n", evt->value);
+                        client->Stop();
+                        run = false;
+                    }
                     break;
 
                 case ZNDNet::EVENT_SESSION_LIST:

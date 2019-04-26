@@ -68,14 +68,14 @@ int ZNDNet::_SendThread(void *data)
         pkt.maxlen = ZNDNET_BUFF_SIZE;
         pkt.channel = -1;
 
-        while (!_this->sendThreadEnd)
+        while (!_this->threadsEnd)
         {
             if (SDL_LockMutex(_this->sendModifyMutex) == 0)
             {
                 SendingList::iterator it = _this->sendPktList.begin();
                 size_t sendedBytes = 0;
 
-                while(it != _this->sendPktList.end() && !_this->sendThreadEnd)
+                while(it != _this->sendPktList.end() && !_this->threadsEnd)
                 {
                     if (sendedBytes >= ZNDNET_TUNE_SEND_MAXDATA)
                     {

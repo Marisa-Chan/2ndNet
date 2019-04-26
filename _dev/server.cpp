@@ -82,7 +82,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
     if (pkt->user == NULL)
     {
-        if (pkt->data[0] == SYS_MSG_HANDSHAKE && pkt->datasz >= PKT_HANDSHAKE_DATA + 2)
+        if (pkt->data[0] == SYS_MSG_HANDSHAKE && rd.size() >= 4)
         {
             uint8_t servstrSz = rd.readU8();
             uint8_t namestrSz = rd.readU8();
@@ -93,7 +93,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                 //putc('\n', stdout);
 
             if (namestrSz == 0 || servstrSz == 0 ||
-               ((size_t)namestrSz + (size_t)servstrSz + PKT_HANDSHAKE_DATA) != pkt->datasz ||
+               ((size_t)namestrSz + (size_t)servstrSz + 2) != rd.size() ||
                     servstrSz != servString.size())
             {
                 return;
@@ -129,7 +129,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
                     if (cnt == 100)
                     {
-                        SendErrFull(pkt->addr);
+                        Srv_SendConnErr(pkt->addr, ERR_CONN_NAME);
                         return;
                     }
                 }
@@ -140,7 +140,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
             if (usr == NULL) // No free space
             {
-                SendErrFull(pkt->addr);
+                Srv_SendConnErr(pkt->addr, ERR_CONN_FULL);
                 return;
             }
             usr->addr = pkt->addr;
@@ -156,8 +156,9 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
             //sLobby.users.push_back(usr);
             //usr->sesID = sLobby.ID;
-            Srv_DoSessionUserJoin(usr, &sLobby);
             Srv_SendConnected(usr);
+            Srv_DoSessionUserJoin(usr, &sLobby);
+
         }
     }
     else
@@ -368,7 +369,7 @@ int ZNDNet::_UpdateServerThread(void *data)
 {
     ZNDNet *_this = (ZNDNet *)data;
 
-    while (!_this->updateThreadEnd)
+    while (!_this->threadsEnd)
     {
         if (SDL_LockMutex(_this->eSyncMutex) == 0)
         {
@@ -405,6 +406,12 @@ int ZNDNet::_UpdateServerThread(void *data)
         SDL_Delay(1);
     }
 
+    SDL_WaitThread(_this->recvThread, NULL);
+    SDL_WaitThread(_this->sendThread, NULL);
+
+    _this->recvThread = NULL;
+    _this->sendThread = NULL;
+
     return 0;
 }
 
@@ -415,17 +422,13 @@ void ZNDNet::StartServer(uint16_t port)
     sock = SDLNet_UDP_Open(port);
 
     Srv_InitUsers();
-
-    recvThreadEnd = false;
-    recvThread = SDL_CreateThread(_RecvThread, "", this);
-
-    sendThreadEnd = false;
-    sendThread = SDL_CreateThread(_SendThread, "", this);
-
-    updateThreadEnd = false;
-    updateThread = SDL_CreateThread(_UpdateServerThread, "", this);
-
     sLobby.Init( GenerateID(), "", true );
+
+    threadsEnd = false;
+
+    recvThread = SDL_CreateThread(_RecvThread, "", this);
+    sendThread = SDL_CreateThread(_SendThread, "", this);
+    updateThread = SDL_CreateThread(_UpdateServerThread, "", this);
 }
 
 
@@ -441,6 +444,7 @@ void ZNDNet::Srv_SendConnected(NetUser *usr)
     RefDataWStream *strm = RefDataWStream::create();
 
     strm->writeU8(SYS_MSG_CONNECTED);
+    strm->writeU8(1); //has lobby
     strm->writeU64(usr->ID);
     strm->writeSzStr(usr->name);
 
@@ -701,6 +705,15 @@ void ZNDNet::Srv_FreeUser(NetUser *usr)
     sFreeUsers.push_back(usr);
 
     usr->status = STATUS_DISCONNECTED;
+}
+
+void ZNDNet::Srv_SendConnErr(const IPaddress &addr, uint8_t type)
+{
+    RefDataWStream *strm = RefDataWStream::create(4);
+    strm->writeU8(SYS_MSG_CONNERR);
+    strm->writeU8(type);
+
+    Send_PushData( new SendingData(addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
 };
