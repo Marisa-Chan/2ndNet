@@ -230,7 +230,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                     rd.readSzStr(pss);
 
                     NetSession *ses = Srv_SessionFind(SID);
-                    if (!ses)
+                    if (!ses || !ses->open)
                     {
                         Srv_SessionErrSend(pkt->user, ERR_SES_JOIN);
                         return;
@@ -302,6 +302,21 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                 {
                     printf("Disconnect request player %s\n", pkt->user->name.c_str());
                     Srv_DisconnectUser(pkt->user, true);
+                }
+                break;
+
+            case SYS_MSG_SES_SHOW:
+                {
+                    if (rd.size() == 1 )
+                    {
+                        uint8_t show = rd.readU8();
+                        if (pkt->user->sesID != sLobby.ID)
+                        {
+                            NetSession *ses = Srv_SessionFind(pkt->user->sesID);
+                            if (ses && ses->lead == pkt->user)
+                                ses->open = (show == 1);
+                        }
+                    }
                 }
                 break;
 
@@ -570,10 +585,9 @@ void ZNDNet::Srv_DisconnectUser(NetUser *usr, bool free)
     Confirm_Clear(usr->addr);
     Pending_Clear(usr->addr);
 
-    Srv_SendDisconnect(usr); //Send to user disconnect msg
+    Srv_SessionUserLeave(usr);
 
-    if (usr->sesID && usr->sesID != sLobby.ID)
-        Srv_SessionUserLeave(usr);
+    Srv_SendDisconnect(usr); //Send to user disconnect msg
 
     usr->status = STATUS_DISCONNECTED;
 
@@ -606,6 +620,7 @@ void ZNDNet::Srv_InterprocessUpdate()
                     sFreeUsers.push_back(usr);
 
                     //Disconnect player
+                    continue; //skip it++
                 }
                 else
                 {
@@ -617,6 +632,31 @@ void ZNDNet::Srv_InterprocessUpdate()
                         Srv_SendPing(usr);
                     }
                 }
+            }
+        } // if (usr)
+
+        it++;
+    }
+
+    for(NetSessionMap::iterator it = sessions.begin() ; it != sessions.end();)
+    {
+        NetSession *ses = it->second;
+
+        if (ses)
+        {
+            if (ses->users.size() == 0)
+            {
+                it = sessions.erase(it);
+                delete ses;
+                continue;
+            }
+
+            if (ses->closeTimer && curTime >= ses->closeTimer)
+            {
+                it = sessions.erase(it);
+                Srv_SessionDisconnectAllUsers(ses, 2);
+                delete ses;
+                continue;
             }
         } // if (usr)
 
@@ -714,6 +754,15 @@ void ZNDNet::Srv_SendConnErr(const IPaddress &addr, uint8_t type)
     strm->writeU8(type);
 
     Send_PushData( new SendingData(addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+
+RefData *ZNDNet::Srv_SYSDataGenSesLeave(int8_t type)
+{
+    RefDataWStream *strm = RefDataWStream::create(4);
+    strm->writeU8(SYS_MSG_SES_LEAVE);
+    strm->writeU8(type);
+    return strm;
 }
 
 };

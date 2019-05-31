@@ -82,9 +82,10 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
     SYS_MSG_RETRY        = 8,
     SYS_MSG_LIST_GAMES   = 0x30,
     SYS_MSG_SES_JOIN     = 0x40, //Server->User if joined (or create). User->Server for request for join
-    SYS_MSG_SES_LEAVE    = 0x41, //User->Server request. Server->User response
+    SYS_MSG_SES_LEAVE    = 0x41, //User->Server request. Server->User kick/disconnect
     SYS_MSG_SES_LEAD     = 0x42, //Server->User
     SYS_MSG_SES_CREATE   = 0x43, //User->Server
+    SYS_MSG_SES_SHOW     = 0x44, //User->Server
     SYS_MSG_SES_ERR      = 0x4F,
     SYS_MSG_CONNERR      = 0x81,
 };
@@ -440,6 +441,7 @@ struct NetSession
     uint32_t     max_players;
 
     uint64_t  orphanedTimer;
+    uint64_t  closeTimer;
 
     NetSession();
     void Init(uint64_t _ID, const std::string &_name, bool _lobby = false);
@@ -534,6 +536,8 @@ public:
     void Cli_SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
     void Cli_BroadcastData(void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
 
+    void Cli_ShowSession(bool show);
+
     Event *Events_Pop();
     void   Events_ClearByType(uint32_t type);
     void   Events_Clear();
@@ -586,6 +590,8 @@ protected:
 
     NetSession *Srv_SessionFind(uint64_t _ID);
     NetSession *Srv_SessionFind(const std::string &name);
+    void Srv_SessionDelete(uint64_t ID);
+    void Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type);
     void Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl = 0, NetUser *from = NULL);
     void Srv_DoSessionUserJoin(NetUser *usr, NetSession *ses);
     void Srv_SessionUserLeave(NetUser *usr);
@@ -597,6 +603,7 @@ protected:
     RefData *Srv_USRDataGenUserLeave(NetUser *usr);
     RefData *Srv_USRDataGenUserJoin(NetUser *usr);
     RefData *Srv_USRDataGenGamesList();
+    RefData *Srv_SYSDataGenSesLeave(int8_t type);
 
 
     RefData *USRDataGenData(uint64_t from, bool cast, uint64_t to, void *data, uint32_t sz);

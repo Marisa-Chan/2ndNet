@@ -184,14 +184,14 @@ int main(int argc, const char *argv[])
                 case ZNDNet::EVENT_USER_ADD:
                     {
                         ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
-                        printf("Joined user %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                        printf("User join %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
                     }
                     break;
 
                 case ZNDNet::EVENT_USER_LEAVE:
                     {
                         ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
-                        printf("Joined user %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                        printf("User leave %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
                     }
                     break;
 
@@ -225,6 +225,14 @@ int main(int argc, const char *argv[])
                     else if (strncasecmp(cmdbuf, "sessions", 8) == 0)
                     {
                         client->Cli_RequestSessions();
+                    }
+                    else if (strncasecmp(cmdbuf, "show", 4) == 0)
+                    {
+                        client->Cli_ShowSession(true);
+                    }
+                    else if (strncasecmp(cmdbuf, "hide", 4) == 0)
+                    {
+                        client->Cli_ShowSession(false);
                     }
                     else if (strncasecmp(cmdbuf, "create", 6) == 0)
                     {

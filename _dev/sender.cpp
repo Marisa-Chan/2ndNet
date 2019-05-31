@@ -255,7 +255,10 @@ int ZNDNet::_SendThread(void *data)
             }
 
             loop++;
-            SDL_Delay(0);
+            if (_this->sendPktList.size())
+                SDL_Delay(0);
+            else
+                SDL_Delay(5);
         }
 
         delete[] sendBuffer;

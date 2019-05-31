@@ -37,6 +37,7 @@ void NetSession::clear()
     lobby = false;
     max_players = 0;
     orphanedTimer = 0;
+    closeTimer = 0;
     open = true;
 }
 
@@ -49,6 +50,7 @@ void NetSession::Init(uint64_t _ID, const std::string &_name, bool _lobby)
     lead = NULL;
     lobby = _lobby;
     max_players = 0;
+    closeTimer = 0;
     open = true;
 }
 
@@ -80,6 +82,22 @@ NetSession *ZNDNet::Srv_SessionFind(const std::string &name)
             return it->second;
     }
     return NULL;
+}
+
+void ZNDNet::Srv_SessionDelete(uint64_t ID)
+{
+    NetSessionMap::iterator fnd = sessions.find(ID);
+    if (fnd != sessions.end())
+    {
+        NetSession *ses = fnd->second;
+        sessions.erase(fnd);
+
+        if (ses)
+        {
+            Srv_SessionDisconnectAllUsers(ses, 1);
+            delete ses;
+        }
+    }
 }
 
 void ZNDNet::Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
@@ -133,6 +151,36 @@ void ZNDNet::Srv_SessionListUsers(NetUser *usr)
 }
 
 
+void ZNDNet::Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
+{
+    if (ses && ses != &sLobby)
+    {
+        if (SDL_LockMutex(sendPktListMutex) == 0)
+        {
+            for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it = ses->users.erase(it))
+            {
+                RefData *dat = Srv_SYSDataGenSesLeave(type);
+
+                NetUser *usr = *it;
+                if (usr)
+                {
+                    if (usr->status != STATUS_DISCONNECTED)
+                    {
+                        SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM);
+                        dta->SetChannel(usr->__idx, 0);
+                        sendPktList.push_back(dta);
+                    }
+
+                    usr->sesID = sLobby.ID;
+                    sLobby.users.push_back(usr);
+                }
+            }
+            SDL_UnlockMutex(sendPktListMutex);
+        }
+    }
+}
+
+
 void ZNDNet::Srv_SessionUserLeave(NetUser *usr)
 {
     if (!usr)
@@ -166,11 +214,14 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr)
                 }
                 else
                 {
-                    sold->orphanedTimer = ttime.GetTicks() + TIMEOUT_SESSION; // Death timer, tick-tack-tick-tack, time is coming
                     sold->lead = NULL;
+                    //sold->orphanedTimer = ttime.GetTicks() + TIMEOUT_SESSION; // Death timer, tick-tack-tick-tack, time is coming
+                    Srv_SessionDelete(sold->ID);
                 }
             }
         }
+
+        usr->sesID = 0;
     }
 }
 

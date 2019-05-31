@@ -528,8 +528,19 @@ void ZNDNet::Cli_Disconnect()
     if ( !cME.IsOnline() )
         return;
 
-    RefDataWStream *rfdata = RefDataWStream::create();
+    RefDataWStream *rfdata = RefDataWStream::create(4);
     rfdata->writeU8(SYS_MSG_DISCONNECT);
+    Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+}
+
+void ZNDNet::Cli_ShowSession(bool show)
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) )
+        return;
+
+    RefDataWStream *rfdata = RefDataWStream::create(4);
+    rfdata->writeU8(SYS_MSG_SES_SHOW);
+    rfdata->writeU8(show ? 1 : 0);
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 
