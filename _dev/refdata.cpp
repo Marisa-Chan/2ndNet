@@ -121,6 +121,7 @@ void RefDataWStream::copy(void *_dst, size_t pos, size_t nbytes)
 
         dst += tocopy;
         nbytes -= tocopy;
+        pos += tocopy;
     }
 }
 
