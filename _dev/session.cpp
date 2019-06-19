@@ -64,6 +64,9 @@ bool NetSession::HasSlot()
 
 NetSession *ZNDNet::Srv_SessionFind(uint64_t _ID)
 {
+    if (_ID == 0)
+        return NULL;
+
     if (_ID == sLobby.ID)
         return &sLobby;
 
@@ -181,7 +184,7 @@ void ZNDNet::Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
 }
 
 
-void ZNDNet::Srv_SessionUserLeave(NetUser *usr)
+void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
 {
     if (!usr)
         return;
@@ -194,12 +197,16 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr)
             sold->users.remove(usr);
         else
         {
+            SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), Srv_SYSDataGenSesLeave(type), PKT_FLAG_SYSTEM);
+            dta->SetChannel(usr->__idx, 0);
+            sendPktList.push_back(dta);
+
             sold->users.remove(usr); // Remove this luser
 
             if (!sold->users.empty()) // If anybody is alive
             {
                 // Make packets for another users about usr is leave
-                RefData *datLeave = Srv_USRDataGenUserLeave(usr);
+                RefData *datLeave = Srv_USRDataGenUserLeave(usr, type);
                 Srv_SessionBroadcast(sold, datLeave, 0, 0, usr); //Send it in sync System channel
             }
 
@@ -230,7 +237,7 @@ void ZNDNet::Srv_DoSessionUserJoin(NetUser *usr, NetSession *ses)
     if (!usr || !ses)
         return;
 
-    Srv_SessionUserLeave(usr);
+    Srv_SessionUserLeave(usr, 0);
 
     if (ses->ID != sLobby.ID)
     {

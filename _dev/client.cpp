@@ -101,14 +101,43 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
             }
             break;
 
+        case SYS_MSG_DISCONNECT:
+            {
+                eStatus = 0;
+                threadsEnd = true;
+                Events_Push( new Event(EVENT_DISCONNECT, ERR_DISCONNECT_SERVER) );
+            }
+            break;
+
         case SYS_MSG_SES_JOIN:
             {
                 cLeader = (rd.readU8() == 1);
                 cME.sesID = rd.readU64();
                 rd.readSzStr( cJoinedSessionName );
+                eStatus &= ~(FLAGS_USERS_LIST_GET | FLAGS_USERS_LIST_UPD);
                 eStatus |= FLAGS_SESSION_JOINED;
 
                 Events_Push( new EventNameID(EVENT_SESSION_JOIN, 0, cJoinedSessionName, cME.sesID) );
+            }
+            break;
+
+        case SYS_MSG_SES_LEAVE:
+            {
+                cLeader = false;
+                cME.sesID = 0;
+                eStatus &= ~(FLAGS_SESSION_JOINED | FLAGS_USERS_LIST_GET | FLAGS_USERS_LIST_UPD);
+
+                Events_Push( new Event(EVENT_SESSION_LEAVE, rd.readU8()) );
+            }
+            break;
+
+        case SYS_MSG_SES_LEAD:
+            {
+                if (cME.sesID)
+                {
+                    cLeader = (rd.readU8() == 1);
+                    Events_Push( new Event(EVENT_SESSION_LEAD, cLeader ? 1 : 0) );
+                }
             }
             break;
 
@@ -143,6 +172,14 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
                 uint32_t from = rd.readU32();
                 uint32_t upto = rd.readU32();
                 ConfirmRetry( AddrSeq(cServAddress, seq), from, upto );
+            }
+            break;
+
+        case SYS_MSG_SES_CLOSE:
+            if (rd.size() == sizeof(uint32_t))
+            {
+                if (eStatus & FLAGS_SESSION_JOINED)
+                    Events_Push( new Event(EVENT_SESSION_END, rd.readU32()) );
             }
             break;
 
@@ -243,12 +280,13 @@ void ZNDNet::Cli_ProcessRegularPkt(Pkt* pkt)
         case USR_MSG_SES_USERLEAVE: //Somebody leav session where you
             {
                 uint64_t UID = rd.readU64();
+                uint8_t tp = rd.readU8();
 
                 for(UserInfoVect::iterator it = cUsers.begin(); it != cUsers.end(); it++)
                 {
                     if (it->ID == UID)
                     {
-                        Events_Push( new EventNameID(EVENT_USER_LEAVE, 0, it->name, it->ID) );
+                        Events_Push( new EventNameID(EVENT_USER_LEAVE, tp, it->name, it->ID) );
                         cUsers.erase(it);
                         eStatus |= FLAGS_USERS_LIST_UPD;
                         break;
@@ -344,6 +382,12 @@ int ZNDNet::_UpdateClientThread(void *data)
     _this->sendThread = NULL;
 
     _this->cME.status = STATUS_DISCONNECTED;
+
+    _this->Send_Clear();
+    _this->Confirm_Clear();
+    _this->Pending_Clear();
+
+    SDLNet_UDP_Close(_this->sock);
 
     return 0;
 }
@@ -494,6 +538,61 @@ bool ZNDNet::Cli_GetUsers(UserInfoVect &dst)
 }
 
 
+bool ZNDNet::Cli_GetUser(UserInfo &dst, const char *name)
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_USERS_LIST_GET) )
+        return false;
+
+    bool res = false;
+
+    if (SDL_LockMutex(eSyncMutex) == 0)
+    {
+        if (eStatus & FLAGS_USERS_LIST_GET)
+        {
+            for(UserInfoVect::iterator it = cUsers.begin(); it != cUsers.end(); it++)
+            {
+                if (strcmp(it->name.c_str(), name) == 0)
+                {
+                    dst = *it;
+                    res = true;
+                    break;
+                }
+            }
+        }
+        SDL_UnlockMutex(eSyncMutex);
+    }
+
+    return res;
+}
+
+bool ZNDNet::Cli_GetUser(UserInfo &dst, uint64_t _ID)
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_USERS_LIST_GET) )
+        return false;
+
+    bool res = false;
+
+    if (SDL_LockMutex(eSyncMutex) == 0)
+    {
+        if (eStatus & FLAGS_USERS_LIST_GET)
+        {
+            for(UserInfoVect::iterator it = cUsers.begin(); it != cUsers.end(); it++)
+            {
+                if (it->ID == _ID)
+                {
+                    dst = *it;
+                    res = true;
+                    break;
+                }
+            }
+        }
+        SDL_UnlockMutex(eSyncMutex);
+    }
+
+    return res;
+}
+
+
 void ZNDNet::Cli_InterprocessUpdate()
 {
     uint64_t curTime = ttime.GetTicks();
@@ -523,24 +622,62 @@ void ZNDNet::Cli_InterprocessUpdate()
     ConfirmQueueCheck();
 }
 
-void ZNDNet::Cli_Disconnect()
+void ZNDNet::Cli_SendDisconnect()
 {
-    if ( !cME.IsOnline() )
-        return;
+    if ( cME.IsOnline() )
+    {
+        Send_Clear();
 
-    RefDataWStream *rfdata = RefDataWStream::create(4);
-    rfdata->writeU8(SYS_MSG_DISCONNECT);
-    Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+        RefDataWStream *rfdata = RefDataWStream::create(4);
+        rfdata->writeU8(SYS_MSG_DISCONNECT);
+        Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+    }
 }
 
 void ZNDNet::Cli_ShowSession(bool show)
 {
-    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) )
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
         return;
 
     RefDataWStream *rfdata = RefDataWStream::create(4);
     rfdata->writeU8(SYS_MSG_SES_SHOW);
     rfdata->writeU8(show ? 1 : 0);
+    Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+}
+
+
+void ZNDNet::Cli_LeaveSession()
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) )
+        return;
+
+    RefDataWStream *rfdata = RefDataWStream::create(4);
+    rfdata->writeU8(SYS_MSG_SES_LEAVE);
+    Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+}
+
+void ZNDNet::Cli_CloseSession(uint32_t closeTime)
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
+        return;
+
+    if (closeTime > 60000)
+        closeTime = 60000;
+
+    RefDataWStream *rfdata = RefDataWStream::create(8);
+    rfdata->writeU8(SYS_MSG_SES_CLOSE);
+    rfdata->writeU32(closeTime);
+    Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+}
+
+void ZNDNet::Cli_KickUser(uint64_t _ID)
+{
+    if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
+        return;
+
+    RefDataWStream *rfdata = RefDataWStream::create(16);
+    rfdata->writeU8(SYS_MSG_SES_KICK);
+    rfdata->writeU64(_ID);
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 

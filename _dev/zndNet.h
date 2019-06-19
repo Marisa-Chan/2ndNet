@@ -86,6 +86,8 @@ enum SYS_MSG //Only for user<->server internal manipulations, short messages < p
     SYS_MSG_SES_LEAD     = 0x42, //Server->User
     SYS_MSG_SES_CREATE   = 0x43, //User->Server
     SYS_MSG_SES_SHOW     = 0x44, //User->Server
+    SYS_MSG_SES_KICK     = 0x45, //User->Server
+    SYS_MSG_SES_CLOSE    = 0x46, //User->Server, Server->User
     SYS_MSG_SES_ERR      = 0x4F,
     SYS_MSG_CONNERR      = 0x81,
 };
@@ -177,12 +179,12 @@ enum
     EVENT_DISCONNECT,   //On disconnect
     EVENT_CONNECTED,    //
     EVENT_CONNERR,
-    EVENT_LOBBY,        //
     EVENT_SESSION_LIST, //Sessions list receieved
     EVENT_SESSION_JOIN, //Success join
     EVENT_SESSION_FAIL, //Error join or create
-    EVENT_SESSION_KICK,
-    EVENT_SESSION_END,  //
+    EVENT_SESSION_LEAVE,
+    EVENT_SESSION_END,
+    EVENT_SESSION_LEAD,  //
     EVENT_USER_LIST,
     EVENT_USER_ADD,
     EVENT_USER_LEAVE,
@@ -529,9 +531,16 @@ public:
     bool Cli_GetSessions(SessionInfoVect &dst);
     void Cli_CreateSession(const std::string &name, const std::string &pass, uint32_t max_players);
     void Cli_JoinSession(uint64_t SID, const std::string &pass);
-    void Cli_Disconnect();
+    void Cli_SendDisconnect();
+
+    void Cli_LeaveSession();
+
+    void Cli_CloseSession(uint32_t closeTime);
+    void Cli_KickUser(uint64_t _ID);
 
     bool Cli_GetUsers(UserInfoVect &dst);
+    bool Cli_GetUser(UserInfo &dst, const char *name);
+    bool Cli_GetUser(UserInfo &dst, uint64_t _ID);
 
     void Cli_SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
     void Cli_BroadcastData(void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR);
@@ -555,6 +564,7 @@ protected:
     void Send_PushData(SendingData *data);
     void Send_RetryData(SendingData *data, size_t from = 0, size_t to = 0, bool decr = true);
     void Send_Clear(const IPaddress &addr);
+    void Send_Clear();
 
     void ConfirmQueueCheck();
     void ConfirmReceive(AddrSeq _seq);
@@ -562,7 +572,9 @@ protected:
     void ConfirmRetry(AddrSeq _seq, uint32_t from, uint32_t to);
 
     void Confirm_Clear(const IPaddress &addr);
+    void Confirm_Clear();
     void Pending_Clear(const IPaddress &addr);
+    void Pending_Clear();
 
     Pkt *Recv_ServerPreparePacket(InRawPkt *pkt);
     Pkt *Recv_ClientPreparePacket(InRawPkt *pkt);
@@ -594,13 +606,14 @@ protected:
     void Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type);
     void Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl = 0, NetUser *from = NULL);
     void Srv_DoSessionUserJoin(NetUser *usr, NetSession *ses);
-    void Srv_SessionUserLeave(NetUser *usr);
+    void Srv_SessionUserLeave(NetUser *usr, uint8_t type = 0);
+    void Srv_UserToLobby(NetUser *usr, uint8_t type);
     void Srv_SessionListUsers(NetUser *usr);
 
     RefData *Srv_SessionErr(uint8_t code);
     void Srv_SessionErrSend(NetUser *usr, uint8_t code);
 
-    RefData *Srv_USRDataGenUserLeave(NetUser *usr);
+    RefData *Srv_USRDataGenUserLeave(NetUser *usr, uint8_t type);
     RefData *Srv_USRDataGenUserJoin(NetUser *usr);
     RefData *Srv_USRDataGenGamesList();
     RefData *Srv_SYSDataGenSesLeave(int8_t type);

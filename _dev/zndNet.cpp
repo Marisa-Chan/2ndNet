@@ -576,6 +576,12 @@ void ZNDNet::Confirm_Clear(const IPaddress &addr)
     }
 }
 
+void ZNDNet::Confirm_Clear()
+{
+    for (SendingList::iterator it = confirmQueue.begin(); it != confirmQueue.end(); it = confirmQueue.erase(it))
+        delete *it;
+}
+
 void ZNDNet::Pending_Clear(const IPaddress &addr)
 {
     for (PartedList::iterator it = pendingPkt.begin(); it != pendingPkt.end();)
@@ -589,6 +595,12 @@ void ZNDNet::Pending_Clear(const IPaddress &addr)
         else
             it++;
     }
+}
+
+void ZNDNet::Pending_Clear()
+{
+    for (PartedList::iterator it = pendingPkt.begin(); it != pendingPkt.end(); it = pendingPkt.erase(it))
+        delete *it;
 }
 
 void ZNDNet::Cli_SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags, uint8_t channel)

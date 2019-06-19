@@ -157,8 +157,7 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
             //sLobby.users.push_back(usr);
             //usr->sesID = sLobby.ID;
             Srv_SendConnected(usr);
-            Srv_DoSessionUserJoin(usr, &sLobby);
-
+            Srv_UserToLobby(usr, 0);
         }
     }
     else
@@ -273,9 +272,6 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                             pkt->user->latence  = latence;
                         else
                             pkt->user->latence = latence + (pkt->user->latence - latence) / (int32_t)LATENCE_OLD_PART;
-
-
-                        printf("Srv %s pong %d   latence %d\n", pkt->user->name.c_str(), seq, pkt->user->latence);
                     }
                 }
                 break;
@@ -300,7 +296,6 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
 
             case SYS_MSG_DISCONNECT:
                 {
-                    printf("Disconnect request player %s\n", pkt->user->name.c_str());
                     Srv_DisconnectUser(pkt->user, true);
                 }
                 break;
@@ -315,6 +310,70 @@ void ZNDNet::Srv_ProcessSystemPkt(Pkt* pkt)
                             NetSession *ses = Srv_SessionFind(pkt->user->sesID);
                             if (ses && ses->lead == pkt->user)
                                 ses->open = (show == 1);
+                        }
+                    }
+                }
+                break;
+
+            case SYS_MSG_SES_LEAVE:
+                {
+                    if (pkt->user->sesID != sLobby.ID)
+                        Srv_UserToLobby(pkt->user, 0);
+                }
+                break;
+
+            case SYS_MSG_SES_KICK:
+                {
+                    if (rd.size() == sizeof(uint64_t) )
+                    {
+                        uint64_t UID = rd.readU64();
+
+                        if (pkt->user->sesID != sLobby.ID && UID != pkt->user->ID)
+                        {
+                            NetSession *ses = Srv_SessionFind(pkt->user->sesID);
+                            if (ses && ses->lead == pkt->user)
+                            {
+                                for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
+                                {
+                                    if ((*it)->ID == UID)
+                                    {
+                                        Srv_UserToLobby(*it, 2);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+
+            case SYS_MSG_SES_CLOSE:
+                {
+                    if (rd.size() == sizeof(uint32_t) )
+                    {
+                        uint32_t timeout = rd.readU32();
+
+                        if (timeout > 60000)
+                            timeout = 60000;
+
+                        if (pkt->user->sesID != sLobby.ID)
+                        {
+                            NetSession *ses = Srv_SessionFind(pkt->user->sesID);
+                            if (ses && ses->lead == pkt->user && !ses->closeTimer)
+                            {
+                                ses->closeTimer = ttime.GetTicks() + timeout;
+
+                                RefDataWStream *dat = RefDataWStream::create(8);
+                                dat->writeU8(SYS_MSG_SES_CLOSE);
+                                dat->writeU32(timeout);
+
+                                for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
+                                {
+                                    printf("CLS User %s %d\n", (*it)->name.c_str(), (*it)->status);
+                                }
+
+                                Srv_SessionBroadcast(ses, dat, PKT_FLAG_SYSTEM, 0, NULL);
+                            }
                         }
                     }
                 }
@@ -427,6 +486,12 @@ int ZNDNet::_UpdateServerThread(void *data)
     _this->recvThread = NULL;
     _this->sendThread = NULL;
 
+    _this->Send_Clear();
+    _this->Confirm_Clear();
+    _this->Pending_Clear();
+
+    SDLNet_UDP_Close(_this->sock);
+
     return 0;
 }
 
@@ -499,7 +564,7 @@ void ZNDNet::Srv_SendSessionJoin(NetUser *usr, NetSession *ses, bool leader)
 
 
 
-RefData *ZNDNet::Srv_USRDataGenUserLeave(NetUser *usr)
+RefData *ZNDNet::Srv_USRDataGenUserLeave(NetUser *usr, uint8_t type)
 {
     if (!usr)
         return NULL;
@@ -507,6 +572,7 @@ RefData *ZNDNet::Srv_USRDataGenUserLeave(NetUser *usr)
     RefDataWStream *dat = RefDataWStream::create();
     dat->writeU8(USR_MSG_SES_USERLEAVE);
     dat->writeU64(usr->ID);
+    dat->writeU8(type);
     return dat;
 }
 
@@ -530,7 +596,7 @@ RefData *ZNDNet::Srv_USRDataGenGamesList()
     uint32_t opened = 0;
     for(NetSessionMap::iterator it = sessions.begin(); it != sessions.end(); it++)
     {
-        if (it->second->open)
+        if (it->second->open && !it->second->closeTimer)
         {
             dat->writeU64( it->second->ID );
             dat->writeU32( it->second->users.size() );
@@ -763,6 +829,18 @@ RefData *ZNDNet::Srv_SYSDataGenSesLeave(int8_t type)
     strm->writeU8(SYS_MSG_SES_LEAVE);
     strm->writeU8(type);
     return strm;
+}
+
+
+void ZNDNet::Srv_UserToLobby(NetUser *usr, uint8_t type)
+{
+    if (!usr)
+        return;
+
+    Srv_SessionUserLeave(usr, type);
+
+    usr->sesID = sLobby.ID;
+    sLobby.users.push_back(usr);
 }
 
 };

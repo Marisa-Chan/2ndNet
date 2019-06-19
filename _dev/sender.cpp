@@ -289,5 +289,16 @@ void ZNDNet::Send_Clear(const IPaddress &addr)
     }
 }
 
+void ZNDNet::Send_Clear()
+{
+    if (SDL_LockMutex(sendModifyMutex) == 0)
+    {
+        for (SendingList::iterator it = sendPktList.begin(); it != sendPktList.end(); it = sendPktList.erase(it))
+            delete *it;
+
+        SDL_UnlockMutex(sendModifyMutex);
+    }
+}
+
 
 }

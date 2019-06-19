@@ -20,6 +20,7 @@ int main()
     ZNDNet::ZNDNet * client2 = new ZNDNet::ZNDNet("TestServer");
 
     serv->StartServer(61234);
+    //sleep(1);
     client->StartClient("c1", server);
     client2->StartClient("c2", server);
 
@@ -184,7 +185,7 @@ int main(int argc, const char *argv[])
                 case ZNDNet::EVENT_USER_ADD:
                     {
                         ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
-                        printf("User join %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                        printf("User join %s (%" PRIx64 ")\n", dat->name.c_str(), dat->id );
                     }
                     break;
 
@@ -196,6 +197,7 @@ int main(int argc, const char *argv[])
                     break;
 
                 default:
+                    printf("Msg %d %d\n", evt->type, evt->value);
                     break;
             }
             delete evt;
@@ -219,7 +221,7 @@ int main(int argc, const char *argv[])
 
                         for(int i = 0; i < usrs.size(); i++)
                         {
-                            printf("\tUser list: %s\n", usrs[i].name.c_str());
+                            printf("\tUser list: %s\t\t%" PRIx64 "\n", usrs[i].name.c_str(), usrs[i].ID);
                         }
                     }
                     else if (strncasecmp(cmdbuf, "sessions", 8) == 0)
@@ -233,6 +235,28 @@ int main(int argc, const char *argv[])
                     else if (strncasecmp(cmdbuf, "hide", 4) == 0)
                     {
                         client->Cli_ShowSession(false);
+                    }
+                    else if (strncasecmp(cmdbuf, "close", 5) == 0)
+                    {
+                        std::string str = cmdbuf + 5;
+                        client->Cli_CloseSession(atoi(str.c_str()));
+                    }
+                    else if (strncasecmp(cmdbuf, "leave", 5) == 0)
+                    {
+                        client->Cli_LeaveSession();
+                    }
+                    else if (strncasecmp(cmdbuf, "kick", 4) == 0)
+                    {
+                        std::string str = cmdbuf + 5;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        ZNDNet::UserInfo inf;
+
+                        if (client->Cli_GetUser(inf, str.c_str()))
+                        {
+                            client->Cli_KickUser(inf.ID);
+                        }
                     }
                     else if (strncasecmp(cmdbuf, "create", 6) == 0)
                     {
@@ -312,7 +336,8 @@ int main(int argc, const char *argv[])
 
     }
 
-    client->Cli_Disconnect();
+    client->Cli_SendDisconnect();
+    client->Stop();
 
     sleep(4);
 
