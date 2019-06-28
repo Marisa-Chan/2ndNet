@@ -1,155 +1,10 @@
 #include "zndNet.h"
-#include "zndNetPkt.h"
-#include "test/crc32.h"
 
 namespace ZNDNet
 {
 
 
-Tick64::Tick64()
-{
-    lap = 0;
-    lastTick = 0;
-}
 
-uint64_t Tick64::GetTicks()
-{
-    uint32_t tick = SDL_GetTicks();
-
-    if (lastTick > tick)
-        lap++;
-
-    lastTick = tick;
-
-    return ((uint64_t)lap << 32) | (uint64_t)tick;
-}
-
-uint32_t Tick64::GetSec()
-{
-    return GetTicks()/1000;
-}
-
-Event::Event(uint32_t _type, uint32_t _value):
-    type(_type),
-    value(_value)
-{
-    size = 0;
-    __id = 0;
-}
-
-Event::~Event()
-{
-}
-
-EventData::EventData(uint32_t _type, uint32_t _value, uint64_t _from, bool _cast, uint64_t _to, uint32_t _sz, uint8_t *_data, uint8_t _channel):
-    Event(_type, _value)
-{
-    from = _from;
-    cast = _cast;
-    to = _to;
-    channel = _channel;
-
-    if (_sz && _data)
-    {
-        data = new uint8_t[_sz];
-        memcpy(data, _data, _sz);
-        size = _sz;
-    }
-    else
-    {
-        size = 0;
-        data = NULL;
-    }
-
-}
-
-EventData::~EventData()
-{
-    if (data)
-        delete[] data;
-}
-
-
-EventNameID::EventNameID(uint32_t _type, uint32_t _value, const std::string &_name, uint64_t _id):
-    Event(_type, _value)
-{
-    name = _name;
-    id = _id;
-}
-
-EventNameID::~EventNameID()
-{
-}
-
-NetUser::NetUser()
-{
-    ID = UID_TYPE_UNKNOWN;
-    name = "";
-    addr.host = 0;
-    addr.port = 0;
-
-    pingTime = 0;
-    pingSeq = 0;
-    pongTime = 0;
-    pongSeq = 0;
-
-    latence = 0;
-    sesID = 0;
-    status = STATUS_DISCONNECTED;
-
-    seqid = 0;
-
-    __idx = -1;
-}
-
-bool NetUser::IsOnline()
-{
-    if (status & STATUS_ONLINE_MASK)
-        return true;
-
-    return false;
-}
-
-uint32_t NetUser::GetSeq()
-{
-    return seqid++;
-}
-
-
-AddrSeq::AddrSeq()
-{
-    addr.host = 0;
-    addr.port = 0;
-    seq = 0;
-}
-
-AddrSeq::AddrSeq(const IPaddress &_addr, uint32_t _seq)
-{
-    set(_addr, _seq);
-}
-
-void AddrSeq::set(const IPaddress &_addr, uint32_t _seq)
-{
-    addr = _addr;
-    seq = _seq;
-}
-
-
-
-void writeU32(uint32_t u, void *dst)
-{
-    uint8_t *dst8 = (uint8_t *)dst;
-    dst8[0] = u & 0xFF;
-    dst8[1] = (u >> 8) & 0xFF;
-    dst8[2] = (u >> 16) & 0xFF;
-    dst8[3] = (u >> 24) & 0xFF;
-}
-
-uint32_t readU32(const void *src)
-{
-    uint8_t *src8 = (uint8_t *)src;
-    return src8[0] | (src8[1] << 8) | (src8[2] << 16) | (src8[3] << 24);
-}
 
 
 
@@ -171,14 +26,13 @@ ZNDNet::ZNDNet(const std::string &servstring)
     //confirmPktList.clear();
     confirmQueueMutex = SDL_CreateMutex();
 
-    sActiveUsers.clear();
 
-    eStatus = 0;
-    cSessionsReqTimeNext = 0;
+
+
 
     eSyncMutex = SDL_CreateMutex();
 
-    sUsers = NULL;
+
 
     eEventMutex = SDL_CreateMutex();
     eEventDataSize = 0;
@@ -186,8 +40,6 @@ ZNDNet::ZNDNet(const std::string &servstring)
     eEventWaitLock = 0;
 
     sendModifyMutex = SDL_CreateMutex();
-
-    cME.status = STATUS_DISCONNECTED;
 }
 
 ZNDNet::~ZNDNet()
@@ -205,20 +57,6 @@ uint64_t ZNDNet::GenerateID()
     return 1 + SDL_GetPerformanceCounter();
 }
 
-
-
-
-
-//int32_t ZNDNet::FindUserIndexByIP(const IPaddress &addr)
-//{
-//    for(int32_t i = 0; i < sActiveUsersNum; i++)
-//    {
-//        if ( IPCMP(sActiveUsers[i]->addr, addr) )
-//            return i;
-//    }
-//
-//    return -1;
-//}
 
 
 void ZNDNet::CorrectName(std::string &name)
@@ -603,41 +441,7 @@ void ZNDNet::Pending_Clear()
         delete *it;
 }
 
-void ZNDNet::Cli_SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags, uint8_t channel)
-{
-    if (!data || !sz)
-        return;
 
-    RefData *rfdat = USRDataGenData(cME.ID, false, to, data, sz);
-
-    flags &= (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
-
-    if (channel >= ZNDNET_USER_SCHNLS)
-        channel = ZNDNET_USER_SCHNLS - 1;
-
-    SendingData *snd = new SendingData(cServAddress, cME.GetSeq(), rfdat, flags);
-    snd->SetChannel(0, channel);
-
-    Send_PushData(snd);
-}
-
-void ZNDNet::Cli_BroadcastData(void *data, uint32_t sz, uint8_t flags, uint8_t channel)
-{
-    if (!data || !sz)
-        return;
-
-    RefData *rfdat = USRDataGenData(cME.ID, true, cME.sesID, data, sz);
-
-    flags &= (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
-
-    if (channel >= ZNDNET_USER_SCHNLS)
-        channel = ZNDNET_USER_SCHNLS - 1;
-
-    SendingData *snd = new SendingData(cServAddress, cME.GetSeq(), rfdat, flags);
-    snd->SetChannel(0, channel);
-
-    Send_PushData(snd);
-}
 
 
 RefData *ZNDNet::USRDataGenData(uint64_t from, bool cast, uint64_t to, void *data, uint32_t sz)
@@ -663,6 +467,72 @@ void ZNDNet::Stop()
         SDL_WaitThread(updateThread, NULL);
         updateThread = NULL;
     }
+}
+
+
+uint8_t ZNDNet::PrepareOutPacket(SendingData &data, UDPpacket &out )
+{
+    if (data.flags & PKT_FLAG_SYSTEM)
+    {
+        if ( data.pdata->size() <= (ZNDNET_PKT_MAXSZ - HDR_OFF_SYS_DATA) )
+        {
+            out.address = data.addr.addr;
+            out.len = data.pdata->size() + HDR_OFF_SYS_DATA;
+            out.maxlen = out.len;
+            out.data[HDR_OFF_FLAGS] = PKT_FLAG_SYSTEM;
+            data.pdata->copy(&out.data[HDR_OFF_SYS_DATA]);
+            return 1;
+        }
+    }
+    else
+    {
+        if ( data.pdata->size() <= (ZNDNET_PKT_MAXSZ - HDR_OFF_DATA) ) //Normal MSG by one piece
+        {
+            out.address = data.addr.addr;
+            out.len = data.pdata->size() + HDR_OFF_DATA;
+            out.maxlen = out.len;
+
+            out.data[HDR_OFF_FLAGS] = data.flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
+            writeU32(data.addr.seq, &out.data[HDR_OFF_SEQID]);
+            out.data[HDR_OFF_CHANNEL] = data.uchnl;
+
+            data.pdata->copy(&out.data[HDR_OFF_DATA]);
+            return 1;
+        }
+        else if ( data.sended < data.pdata->size() ) // Multipart
+        {
+            uint32_t UpTo = data.pdata->size();
+
+            if (data.retryUpTo)
+                UpTo = data.retryUpTo; //Set upper border, if some part not receieved
+
+            uint32_t pktdatalen = UpTo - data.sended;  //How many bytes we needed to send
+
+            if ( pktdatalen > (ZNDNET_PKT_MAXSZ - HDR_OFF_PART_DATA) )
+                pktdatalen = (ZNDNET_PKT_MAXSZ - HDR_OFF_PART_DATA); //Maximum size we can handle by 1 packet
+
+            out.address = data.addr.addr;
+            out.len = HDR_OFF_PART_DATA + pktdatalen;
+            out.maxlen = out.len;
+
+            out.data[HDR_OFF_FLAGS] = PKT_FLAG_PART | (data.flags & PKT_FLAG_MASK_NORMAL);
+            writeU32(data.addr.seq, &out.data[HDR_OFF_SEQID]);
+            out.data[HDR_OFF_CHANNEL] = data.uchnl;
+
+            writeU32(data.pdata->size(), &out.data[HDR_OFF_PART_FSIZE]);
+            writeU32(data.sended, &out.data[HDR_OFF_PART_OFFSET]);
+
+            data.pdata->copy(&out.data[HDR_OFF_PART_DATA], data.sended, pktdatalen);
+
+            data.sended += pktdatalen;
+
+            if (data.sended >= UpTo)
+                return 1;
+            else
+                return 2;
+        }
+    }
+    return 0;
 }
 
 };

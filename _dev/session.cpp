@@ -4,65 +4,7 @@
 namespace ZNDNet
 {
 
-SessionInfo& SessionInfo::operator= (const SessionInfo& x)
-{
-    ID = x.ID;
-    name = x.name;
-    pass = x.pass;
-    players = x.players;
-    max_players = x.max_players;
-    return *this;
-}
-
-UserInfo& UserInfo::operator= (const UserInfo& x)
-{
-    ID = x.ID;
-    name = x.name;
-    lead = x.lead;
-    return *this;
-}
-
-NetSession::NetSession()
-{
-    clear();
-}
-
-void NetSession::clear()
-{
-    ID = 0;
-    name.clear();
-    users.clear();
-    password.clear();
-    lead = NULL;
-    lobby = false;
-    max_players = 0;
-    orphanedTimer = 0;
-    closeTimer = 0;
-    open = true;
-}
-
-void NetSession::Init(uint64_t _ID, const std::string &_name, bool _lobby)
-{
-    ID = _ID;
-    name = _name;
-    users.clear();
-    password.clear();
-    lead = NULL;
-    lobby = _lobby;
-    max_players = 0;
-    closeTimer = 0;
-    open = true;
-}
-
-bool NetSession::HasSlot()
-{
-    if (!max_players || users.size() < max_players)
-        return true;
-
-    return false;
-}
-
-NetSession *ZNDNet::Srv_SessionFind(uint64_t _ID)
+NetSession *ZNDServer::SessionFind(uint64_t _ID)
 {
     if (_ID == 0)
         return NULL;
@@ -77,7 +19,7 @@ NetSession *ZNDNet::Srv_SessionFind(uint64_t _ID)
     return NULL;
 }
 
-NetSession *ZNDNet::Srv_SessionFind(const std::string &name)
+NetSession *ZNDServer::SessionFind(const std::string &name)
 {
     for(NetSessionMap::iterator it = sessions.begin(); it != sessions.end(); it++)
     {
@@ -87,7 +29,7 @@ NetSession *ZNDNet::Srv_SessionFind(const std::string &name)
     return NULL;
 }
 
-void ZNDNet::Srv_SessionDelete(uint64_t ID)
+void ZNDServer::SessionDelete(uint64_t ID)
 {
     NetSessionMap::iterator fnd = sessions.find(ID);
     if (fnd != sessions.end())
@@ -97,13 +39,13 @@ void ZNDNet::Srv_SessionDelete(uint64_t ID)
 
         if (ses)
         {
-            Srv_SessionDisconnectAllUsers(ses, 1);
+            SessionDisconnectAllUsers(ses, 1);
             delete ses;
         }
     }
 }
 
-void ZNDNet::Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
+void ZNDServer::SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
 {
     if (!ses || !dat)
         return;
@@ -113,7 +55,7 @@ void ZNDNet::Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, 
         for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
         {
             NetUser *usr = *it;
-            if (usr && usr != from && usr->status != STATUS_DISCONNECTED)
+            if (usr && usr != from && usr->IsOnline())
             {
                 SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, flags);
                 dta->SetChannel(usr->__idx, chnl);
@@ -124,15 +66,15 @@ void ZNDNet::Srv_SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, 
     }
 }
 
-void ZNDNet::Srv_SessionListUsers(NetUser *usr)
+void ZNDServer::SessionListUsers(NetUser *usr)
 {
     if (!usr)
         return;
 
-    if (usr->status == STATUS_DISCONNECTED || usr->sesID == 0 || usr->sesID == sLobby.ID)
+    if (!usr->IsOnline() || usr->sesID == 0 || usr->sesID == sLobby.ID)
         return;
 
-    NetSession *ses = Srv_SessionFind(usr->sesID);
+    NetSession *ses = SessionFind(usr->sesID);
     if (ses && !ses->lobby)
     {
         RefDataWStream *dat = RefDataWStream::create();
@@ -154,7 +96,7 @@ void ZNDNet::Srv_SessionListUsers(NetUser *usr)
 }
 
 
-void ZNDNet::Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
+void ZNDServer::SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
 {
     if (ses && ses != &sLobby)
     {
@@ -162,12 +104,12 @@ void ZNDNet::Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
         {
             for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it = ses->users.erase(it))
             {
-                RefData *dat = Srv_SYSDataGenSesLeave(type);
+                RefData *dat = SYSDataGenSesLeave(type);
 
                 NetUser *usr = *it;
                 if (usr)
                 {
-                    if (usr->status != STATUS_DISCONNECTED)
+                    if (usr->IsOnline())
                     {
                         SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM);
                         dta->SetChannel(usr->__idx, 0);
@@ -184,12 +126,12 @@ void ZNDNet::Srv_SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
 }
 
 
-void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
+void ZNDServer::SessionUserLeave(NetUser *usr, uint8_t type)
 {
     if (!usr)
         return;
 
-    NetSession *sold = Srv_SessionFind(usr->sesID);
+    NetSession *sold = SessionFind(usr->sesID);
 
     if (sold)
     {
@@ -197,7 +139,7 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
             sold->users.remove(usr);
         else
         {
-            SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), Srv_SYSDataGenSesLeave(type), PKT_FLAG_SYSTEM);
+            SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), SYSDataGenSesLeave(type), PKT_FLAG_SYSTEM);
             dta->SetChannel(usr->__idx, 0);
             sendPktList.push_back(dta);
 
@@ -206,8 +148,8 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
             if (!sold->users.empty()) // If anybody is alive
             {
                 // Make packets for another users about usr is leave
-                RefData *datLeave = Srv_USRDataGenUserLeave(usr, type);
-                Srv_SessionBroadcast(sold, datLeave, 0, 0, usr); //Send it in sync System channel
+                RefData *datLeave = USRDataGenUserLeave(usr, type);
+                SessionBroadcast(sold, datLeave, 0, 0, usr); //Send it in sync System channel
             }
 
             if (sold->lead == usr) // Oh my... this luser was a leader
@@ -217,13 +159,13 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
                     sold->lead = sold->users.front();
 
                     // Make packet for usr with leader flag
-                    Srv_SendLeaderStatus(sold->lead, true);
+                    SendLeaderStatus(sold->lead, true);
                 }
                 else
                 {
                     sold->lead = NULL;
-                    //sold->orphanedTimer = ttime.GetTicks() + TIMEOUT_SESSION; // Death timer, tick-tack-tick-tack, time is coming
-                    Srv_SessionDelete(sold->ID);
+                    //sold->orphanedTimer = ttime.GetTicks() + TIMEOUT_SESSION;
+                    SessionDelete(sold->ID);
                 }
             }
         }
@@ -232,37 +174,37 @@ void ZNDNet::Srv_SessionUserLeave(NetUser *usr, uint8_t type)
     }
 }
 
-void ZNDNet::Srv_DoSessionUserJoin(NetUser *usr, NetSession *ses)
+void ZNDServer::DoSessionUserJoin(NetUser *usr, NetSession *ses)
 {
     if (!usr || !ses)
         return;
 
-    Srv_SessionUserLeave(usr, 0);
+    SessionUserLeave(usr, 0);
 
     if (ses->ID != sLobby.ID)
     {
         if (!ses->users.empty())
         {
-            RefData *dat = Srv_USRDataGenUserJoin(usr);
-            Srv_SessionBroadcast(ses, dat, 0, 0, usr); //Send it in sync System channel
+            RefData *dat = USRDataGenUserJoin(usr);
+            SessionBroadcast(ses, dat, 0, 0, usr); //Send it in sync System channel
         }
 
         if (!ses->lead)
         {
             ses->lead = usr;
-            Srv_SendSessionJoin(usr, ses, true);
+            SendSessionJoin(usr, ses, true);
         }
         else
-            Srv_SendSessionJoin(usr, ses, false);
+            SendSessionJoin(usr, ses, false);
     }
 
     usr->sesID = ses->ID;
     ses->users.push_back(usr);
 
-    Srv_SessionListUsers(usr);
+    SessionListUsers(usr);
 }
 
-RefData *ZNDNet::Srv_SessionErr(uint8_t code)
+RefData *ZNDServer::SessionErr(uint8_t code)
 {
     RefDataStatic *dt = RefDataStatic::create(2);
     uint8_t *data = dt->get();
@@ -271,12 +213,12 @@ RefData *ZNDNet::Srv_SessionErr(uint8_t code)
     return dt;
 }
 
-void ZNDNet::Srv_SessionErrSend(NetUser *usr, uint8_t code)
+void ZNDServer::SessionErrSend(NetUser *usr, uint8_t code)
 {
     if (!usr)
         return;
 
-    RefData *msg = Srv_SessionErr(code);
+    RefData *msg = SessionErr(code);
     SendingData *snd = new SendingData(usr->addr, usr->GetSeq(), msg, PKT_FLAG_SYSTEM);
     snd->SetChannel(usr->__idx, 0);
     Send_PushData(snd);

@@ -5,13 +5,12 @@ LIBS = -lSDL2 -lSDL2_net
 
 OBJS =  \
 	client.cpp\
+	client_threads.cpp\
 	main.cpp\
-	memread.cpp\
-	packets.cpp\
 	reciever.cpp\
-	refdata.cpp\
 	sender.cpp\
 	server.cpp\
+	server_threads.cpp\
 	session.cpp\
 	zndNet.cpp\
 	test/crc32.cpp

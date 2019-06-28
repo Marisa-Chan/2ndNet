@@ -1,12 +1,17 @@
 #include "zndNet.h"
-#include "zndNetPkt.h"
-#include "memread.h"
-#include "test/crc32.h"
 
 namespace ZNDNet
 {
 
-Pkt *ZNDNet::Recv_ClientPreparePacket(InRawPkt *pkt)
+ZNDClient::ZNDClient(const std::string &servstring)
+: ZNDNet(servstring)
+{
+    cSessionsReqTimeNext = 0;
+    cME.status = NetUser::STATUS_DISCONNECTED;
+    eStatus = 0;
+}
+
+Pkt *ZNDClient::Recv_PreparePacket(InRawPkt *pkt)
 {
     if (!pkt->Parse())
     {
@@ -68,7 +73,7 @@ Pkt *ZNDNet::Recv_ClientPreparePacket(InRawPkt *pkt)
     return NULL;
 }
 
-void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
+void ZNDClient::ProcessSystemPkt(Pkt* pkt)
 {
     if (!pkt)
         return;
@@ -82,7 +87,7 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
     {
         case SYS_MSG_CONNECTED:
             {
-                if (cME.status == STATUS_CLI_CONNECTING)
+                if (cME.status == NetUser::STATUS_CONNECTING)
                 {
                     cServHasLobby = rd.readU8() != 0;
                     uint64_t ID = rd.readU64();
@@ -90,7 +95,7 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
                     rd.readSzStr(nm);
                     cME.name = nm;
                     cME.ID = ID;
-                    cME.status = STATUS_CONNECTED;
+                    cME.status = NetUser::STATUS_CONNECTED;
 
                     Events_Push( new EventNameID(EVENT_CONNECTED, cServHasLobby, cME.name, cME.ID) );
 
@@ -184,7 +189,7 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
             break;
 
         case SYS_MSG_CONNERR:
-            if (cME.status == STATUS_CLI_CONNECTING && rd.size() == 1)
+            if (cME.status == NetUser::STATUS_CONNECTING && rd.size() == 1)
             {
                 uint8_t type = rd.readU8();
                 if (type == ERR_CONN_FULL || type == ERR_CONN_NAME)
@@ -201,7 +206,7 @@ void ZNDNet::Cli_ProcessSystemPkt(Pkt* pkt)
     }
 }
 
-void ZNDNet::Cli_ProcessRegularPkt(Pkt* pkt)
+void ZNDClient::ProcessRegularPkt(Pkt* pkt)
 {
     if (!pkt)
         return;
@@ -324,78 +329,10 @@ void ZNDNet::Cli_ProcessRegularPkt(Pkt* pkt)
     }
 }
 
-int ZNDNet::_UpdateClientThread(void *data)
+
+void ZNDClient::Start(const std::string &name, const IPaddress &addr)
 {
-    ZNDNet *_this = (ZNDNet *)data;
-//    uint64_t cTR = 0;
-//    uint64_t cBTR = 0;
-    while (!_this->threadsEnd)
-    {
-        if (SDL_LockMutex(_this->eSyncMutex) == 0)
-        {
-            uint64_t forceBrake = _this->ttime.GetTicks() + TIMEOUT_CLI_RECV_MAX;
-            while (_this->ttime.GetTicks() < forceBrake)
-            {
-                InRawPkt *ipkt = _this->Recv_PopInRaw();
-                if (!ipkt)
-                    break; // If no more packets -> do another things
-
-                Pkt * pkt = _this->Recv_ClientPreparePacket(ipkt);
-                if (pkt)
-                {
-//                    cBTR += pkt->_raw_len;
-//                    if(cTR < _this->ttime.GetTicks())
-//                    {
-//                        printf("Bandwidth %d \n", (uint32_t)cBTR  );
-//                        cBTR = 0;
-//                        cTR = _this->ttime.GetTicks() + 1000;
-//                    }
-
-                    if (pkt->flags & PKT_FLAG_SYSTEM)
-                    {
-                        _this->Cli_ProcessSystemPkt(pkt);
-                    }
-                    else
-                    {
-                        if (pkt->flags & PKT_FLAG_GARANT)
-                            _this->SendDelivered(pkt->seqid, pkt->addr);
-
-                        _this->Cli_ProcessRegularPkt(pkt);
-                    }
-
-                    delete pkt;
-                }
-            }
-
-            _this->Cli_InterprocessUpdate();
-
-            SDL_UnlockMutex(_this->eSyncMutex);
-        }
-
-        SDL_Delay(1);
-    }
-
-    SDL_WaitThread(_this->recvThread, NULL);
-    SDL_WaitThread(_this->sendThread, NULL);
-
-    _this->recvThread = NULL;
-    _this->sendThread = NULL;
-
-    _this->cME.status = STATUS_DISCONNECTED;
-
-    _this->Send_Clear();
-    _this->Confirm_Clear();
-    _this->Pending_Clear();
-
-    SDLNet_UDP_Close(_this->sock);
-
-    return 0;
-}
-
-
-void ZNDNet::StartClient(const std::string &name, const IPaddress &addr)
-{
-    if (cME.status != STATUS_DISCONNECTED)
+    if (cME.status != NetUser::STATUS_DISCONNECTED)
         return;
 
     mode = MODE_CLIENT;
@@ -403,25 +340,26 @@ void ZNDNet::StartClient(const std::string &name, const IPaddress &addr)
 
     cServAddress = addr;
     cME.name = name;
-    cME.status = STATUS_CLI_CONNECTING;
+    cME.status = NetUser::STATUS_CONNECTING;
 
     eStatus = 0;
 
     cSessionsReqTimeNext = 0;
+    cSessionsMakeRequest = false;
 
     threadsEnd = false;
+
+    cTimeOut = ttime.GetTicks() + TIMEOUT_CONNECT;
 
     recvThread = SDL_CreateThread(_RecvThread, "", this);
     sendThread = SDL_CreateThread(_SendThread, "", this);
 
-    updateThread = SDL_CreateThread(_UpdateClientThread, "", this);
+    updateThread = SDL_CreateThread(_UpdateThread, "", this);
 
-    Cli_SendConnect();
-
-    cTimeOut = ttime.GetTicks() + TIMEOUT_CONNECT;
+    SendConnect();
 }
 
-void ZNDNet::Cli_SendConnect()
+void ZNDClient::SendConnect()
 {
     RefDataWStream *rfdata = RefDataWStream::create();
     rfdata->writeU8(SYS_MSG_HANDSHAKE);
@@ -434,7 +372,7 @@ void ZNDNet::Cli_SendConnect()
 }
 
 
-void ZNDNet::Cli_RequestGamesList()
+void ZNDClient::RequestGamesList()
 {
     RefDataWStream *rfdata = RefDataWStream::create();
     rfdata->writeU8(SYS_MSG_LIST_GAMES);
@@ -443,12 +381,12 @@ void ZNDNet::Cli_RequestGamesList()
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 
-uint8_t ZNDNet::Cli_GetStatus()
+uint8_t ZNDClient::GetStatus()
 {
     return cME.status;
 }
 
-bool ZNDNet::Cli_GetSessions(SessionInfoVect &dst)
+bool ZNDClient::GetSessions(SessionInfoVect &dst)
 {
     if ( !cME.IsOnline() )
         return false;
@@ -472,7 +410,7 @@ bool ZNDNet::Cli_GetSessions(SessionInfoVect &dst)
     return res;
 }
 
-void ZNDNet::Cli_RequestSessions()
+void ZNDClient::RequestSessions()
 {
     if ( !cME.IsOnline() )
         return;
@@ -482,7 +420,7 @@ void ZNDNet::Cli_RequestSessions()
 
 
 
-void ZNDNet::Cli_CreateSession(const std::string &name, const std::string &pass, uint32_t max_players)
+void ZNDClient::CreateSession(const std::string &name, const std::string &pass, uint32_t max_players)
 {
     if ( !cME.IsOnline() )
         return;
@@ -499,7 +437,7 @@ void ZNDNet::Cli_CreateSession(const std::string &name, const std::string &pass,
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 
-void ZNDNet::Cli_JoinSession(uint64_t SID, const std::string &pass)
+void ZNDClient::JoinSession(uint64_t SID, const std::string &pass)
 {
     if ( !cME.IsOnline() )
         return;
@@ -513,7 +451,7 @@ void ZNDNet::Cli_JoinSession(uint64_t SID, const std::string &pass)
 }
 
 
-bool ZNDNet::Cli_GetUsers(UserInfoVect &dst)
+bool ZNDClient::GetUsers(UserInfoVect &dst)
 {
     if ( !cME.IsOnline() )
         return false;
@@ -538,7 +476,7 @@ bool ZNDNet::Cli_GetUsers(UserInfoVect &dst)
 }
 
 
-bool ZNDNet::Cli_GetUser(UserInfo &dst, const char *name)
+bool ZNDClient::GetUser(UserInfo &dst, const char *name)
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_USERS_LIST_GET) )
         return false;
@@ -565,7 +503,7 @@ bool ZNDNet::Cli_GetUser(UserInfo &dst, const char *name)
     return res;
 }
 
-bool ZNDNet::Cli_GetUser(UserInfo &dst, uint64_t _ID)
+bool ZNDClient::GetUser(UserInfo &dst, uint64_t _ID)
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_USERS_LIST_GET) )
         return false;
@@ -593,7 +531,7 @@ bool ZNDNet::Cli_GetUser(UserInfo &dst, uint64_t _ID)
 }
 
 
-void ZNDNet::Cli_InterprocessUpdate()
+void ZNDClient::InterprocessUpdate()
 {
     uint64_t curTime = ttime.GetTicks();
 
@@ -601,7 +539,7 @@ void ZNDNet::Cli_InterprocessUpdate()
     {
         threadsEnd = true;
 
-        if (cME.status == STATUS_CLI_CONNECTING)
+        if (cME.status == NetUser::STATUS_CONNECTING)
             Events_Push( new Event(EVENT_CONNERR, ERR_CONN_TIMEOUT) );
         else
             Events_Push( new Event(EVENT_DISCONNECT, ERR_DISCONNECT_TIMEOUT) );
@@ -615,14 +553,14 @@ void ZNDNet::Cli_InterprocessUpdate()
         cSessionsMakeRequest = false;
         cSessionsReqTimeNext = curTime + DELAY_SESS_REQ;
 
-        Cli_RequestGamesList();
+        RequestGamesList();
     }
 
     PendingCheck(); // Delete timeout packets
     ConfirmQueueCheck();
 }
 
-void ZNDNet::Cli_SendDisconnect()
+void ZNDClient::SendDisconnect()
 {
     if ( cME.IsOnline() )
     {
@@ -634,7 +572,7 @@ void ZNDNet::Cli_SendDisconnect()
     }
 }
 
-void ZNDNet::Cli_ShowSession(bool show)
+void ZNDClient::ShowSession(bool show)
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
         return;
@@ -646,7 +584,7 @@ void ZNDNet::Cli_ShowSession(bool show)
 }
 
 
-void ZNDNet::Cli_LeaveSession()
+void ZNDClient::LeaveSession()
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) )
         return;
@@ -656,7 +594,7 @@ void ZNDNet::Cli_LeaveSession()
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 
-void ZNDNet::Cli_CloseSession(uint32_t closeTime)
+void ZNDClient::CloseSession(uint32_t closeTime)
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
         return;
@@ -670,7 +608,7 @@ void ZNDNet::Cli_CloseSession(uint32_t closeTime)
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
 }
 
-void ZNDNet::Cli_KickUser(uint64_t _ID)
+void ZNDClient::KickUser(uint64_t _ID)
 {
     if ( !cME.IsOnline() || !(eStatus & FLAGS_SESSION_JOINED) || !cLeader )
         return;
@@ -679,6 +617,43 @@ void ZNDNet::Cli_KickUser(uint64_t _ID)
     rfdata->writeU8(SYS_MSG_SES_KICK);
     rfdata->writeU64(_ID);
     Send_PushData( new SendingData(cServAddress, 0, rfdata, PKT_FLAG_SYSTEM));
+}
+
+
+void ZNDClient::SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags, uint8_t channel)
+{
+    if (!data || !sz)
+        return;
+
+    RefData *rfdat = USRDataGenData(cME.ID, false, to, data, sz);
+
+    flags &= (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
+
+    if (channel >= ZNDNET_USER_SCHNLS)
+        channel = ZNDNET_USER_SCHNLS - 1;
+
+    SendingData *snd = new SendingData(cServAddress, cME.GetSeq(), rfdat, flags);
+    snd->SetChannel(0, channel);
+
+    Send_PushData(snd);
+}
+
+void ZNDClient::BroadcastData(void *data, uint32_t sz, uint8_t flags, uint8_t channel)
+{
+    if (!data || !sz)
+        return;
+
+    RefData *rfdat = USRDataGenData(cME.ID, true, cME.sesID, data, sz);
+
+    flags &= (PKT_FLAG_GARANT | PKT_FLAG_ASYNC);
+
+    if (channel >= ZNDNET_USER_SCHNLS)
+        channel = ZNDNET_USER_SCHNLS - 1;
+
+    SendingData *snd = new SendingData(cServAddress, cME.GetSeq(), rfdat, flags);
+    snd->SetChannel(0, channel);
+
+    Send_PushData(snd);
 }
 
 };
