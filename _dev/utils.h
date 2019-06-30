@@ -5,6 +5,12 @@
 namespace ZNDNet
 {
 
+inline bool IPCMP(const IPaddress &a, const IPaddress &b)
+{
+    return a.host == b.host && a.port == b.port;
+}
+
+
 inline void writeU32(uint32_t u, void *dst)
 {
     uint8_t *dst8 = (uint8_t *)dst;

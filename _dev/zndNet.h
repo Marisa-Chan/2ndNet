@@ -12,13 +12,14 @@
 
 
 #define ZNDNET_BUFF_SIZE     4096
-#define ZNDNET_USER_MAX      1024
+#define ZNDNET_USERS_MAX      1024
+#define ZNDNET_SES_USERS_MAX  (ZNDNET_USERS_MAX / 4)
 #define ZNDNET_USER_NAME_MAX 20
 #define ZNDNET_MAX_MTU       1400
 #define ZNDNET_PKT_UDPSZ     8
 #define ZNDNET_PKT_MAXSZ     (ZNDNET_MAX_MTU - ZNDNET_PKT_UDPSZ)
 #define ZNDNET_USER_SCHNLS   2          // Minimum 2 (0 - always system synced, 1+ user channels)
-#define ZNDNET_SYNC_CHANNELS (ZNDNET_USER_MAX * ZNDNET_USER_SCHNLS)
+#define ZNDNET_SYNC_CHANNELS (ZNDNET_USERS_MAX * ZNDNET_USER_SCHNLS)
 
 #define ZNDNET_TUNE_RECV_PKTS    16     // Maximum packets that will be polled at once
 #define ZNDNET_TUNE_SEND_DELAY   1      // millisecond
@@ -49,7 +50,8 @@ enum MODE
 {
     MODE_UNKNOWN,
     MODE_SERVER,
-    MODE_CLIENT
+    MODE_CLIENT,
+    MODE_SINGLE
 };
 
 // Client flags
@@ -152,10 +154,6 @@ protected:
 // Events
     void Events_Push(Event *evnt);
 
-
-// Utils
-    static bool IPCMP(const IPaddress &a, const IPaddress &b);
-
 // Data
 public:
 
@@ -192,7 +190,7 @@ protected:
     PartedList  pendingPkt;
 
     Tick64       ttime;
-    NetSessionMap sessions;
+
 
 
 
@@ -211,5 +209,6 @@ protected:
 
 #include "client.h"
 #include "server.h"
+#include "single.h"
 
 #endif // ZNDNET_H_INCLUDED

@@ -389,11 +389,6 @@ Event *ZNDNet::Events_WaitForMsg(uint32_t type, uint32_t time)
     return NULL;
 }
 
-bool ZNDNet::IPCMP(const IPaddress &a, const IPaddress &b)
-{
-    return a.host == b.host && a.port == b.port;
-}
-
 void ZNDNet::Confirm_Clear(const IPaddress &addr)
 {
     for (SendingList::iterator it = confirmQueue.begin(); it != confirmQueue.end(); )

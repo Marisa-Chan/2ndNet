@@ -336,7 +336,7 @@ struct SendingData
 
     void SetChannel(uint32_t userIDX, uint32_t userChnl = 0)
     {
-        if (userChnl != PKT_CHNL_NOT_SET && userIDX < ZNDNET_USER_MAX && userChnl < ZNDNET_USER_SCHNLS)
+        if (userChnl != PKT_CHNL_NOT_SET && userIDX < ZNDNET_USERS_MAX && userChnl < ZNDNET_USER_SCHNLS)
         {
             schnl = userIDX * ZNDNET_USER_SCHNLS + userChnl;
             uchnl = userChnl;

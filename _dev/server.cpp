@@ -5,10 +5,8 @@ namespace ZNDNet
 {
 
 ZNDServer::ZNDServer(const std::string &servstring)
-: ZNDNet(servstring)
+: ZNDNet(servstring), users(ZNDNET_USERS_MAX)
 {
-    sActiveUsers.clear();
-    sUsers = NULL;
 }
 
 Pkt *ZNDServer::Recv_PreparePacket(InRawPkt *pkt)
@@ -20,7 +18,7 @@ Pkt *ZNDServer::Recv_PreparePacket(InRawPkt *pkt)
         return NULL;
     }
 
-    NetUser *from = FindUserByIP(pkt->addr);
+    NetUser *from = users.FindByIP(pkt->addr);
 
     if (pkt->hdr.flags & PKT_FLAG_SYSTEM) // System message
     {
@@ -113,7 +111,7 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
 
             CorrectName(nm);
 
-            if (FindUserByName(nm))
+            if (users.FindByName(nm))
             {
                 if (nm.size() > ZNDNET_USER_NAME_MAX - 5)
                     nm.resize( ZNDNET_USER_NAME_MAX - 5 );
@@ -136,10 +134,10 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
                         return;
                     }
                 }
-                while(FindUserByName(nm));
+                while(users.FindByName(nm));
             }
 
-            NetUser *usr = AllocUser();
+            NetUser *usr = users.Alloc();
 
             if (usr == NULL) // No free space
             {
@@ -198,6 +196,9 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
                     }
 
                     uint32_t mx_pl = rd.readU32();
+
+                    if (mx_pl > ZNDNET_SES_USERS_MAX)
+                        mx_pl = ZNDNET_SES_USERS_MAX;
 
                     pswd.clear();
                     rd.readSzStr(pswd);
@@ -299,7 +300,8 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
 
             case SYS_MSG_DISCONNECT:
                 {
-                    DisconnectUser(pkt->user, true);
+                    DisconnectUser(pkt->user);
+                    users.Free(pkt->user);
                 }
                 break;
 
@@ -412,7 +414,7 @@ void ZNDServer::ProcessRegularPkt(Pkt* pkt)
                 {
                     if ( cast == 0 )
                     {
-                        NetUser *usr = FindUserByID(to);
+                        NetUser *usr = users.FindByID(to);
                         if (usr)
                         {
                             RefData *dat = USRDataGenData(from, false, to, pkt->data + 1 + rd.tell(), sz);
@@ -445,7 +447,7 @@ void ZNDServer::Start(uint16_t port)
     mode = MODE_SERVER;
     sock = SDLNet_UDP_Open(port);
 
-    InitUsers();
+    users.Init();
     sLobby.Init( GenerateID(), "", true );
 
     threadsEnd = false;
@@ -586,7 +588,7 @@ void ZNDServer::SendDisconnect(NetUser *usr)
     Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
-void ZNDServer::DisconnectUser(NetUser *usr, bool free)
+void ZNDServer::DisconnectUser(NetUser *usr)
 {
     if (!usr)
         return;
@@ -600,12 +602,6 @@ void ZNDServer::DisconnectUser(NetUser *usr, bool free)
     SendDisconnect(usr); //Send to user disconnect msg
 
     usr->status = NetUser::STATUS_DISCONNECTED;
-
-    if (free)
-    {
-        sActiveUsers.remove(usr);
-        sFreeUsers.push_back(usr);
-    }
 }
 
 
@@ -613,7 +609,7 @@ void ZNDServer::InterprocessUpdate()
 {
     uint64_t curTime = ttime.GetTicks();
 
-    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end();)
+    for(NetUserList::iterator it = users.begin() ; it != users.end();)
     {
         NetUser *usr = *it;
 
@@ -624,10 +620,9 @@ void ZNDServer::InterprocessUpdate()
                 if (curTime > usr->pongTime + TIMEOUT_USER)
                 {
                     printf("Timeout player %s\n", usr->name.c_str());
-                    DisconnectUser(usr, false);
+                    DisconnectUser(usr);
 
-                    it = sActiveUsers.erase(it);
-                    sFreeUsers.push_back(usr);
+                    it = users.erase(it);
 
                     //Disconnect player
                     continue; //skip it++
@@ -678,84 +673,6 @@ void ZNDServer::InterprocessUpdate()
 
 }
 
-
-void ZNDServer::InitUsers()
-{
-    sActiveUsers.clear();
-    sFreeUsers.clear();
-
-    if (!sUsers)
-        sUsers = new NetUser[ZNDNET_USER_MAX];
-
-    for(int32_t i = 0; i < ZNDNET_USER_MAX; i++)
-    {
-        NetUser *usr = &sUsers[i];
-        usr->__idx = i;
-
-        sFreeUsers.push_back(usr);
-    }
-}
-
-NetUser *ZNDServer::FindUserByIP(const IPaddress &addr)
-{
-    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
-    {
-        if ( IPCMP((*it)->addr, addr) )
-            return (*it);
-    }
-
-    return NULL;
-}
-
-NetUser *ZNDServer::FindUserByID(uint64_t ID)
-{
-    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
-    {
-        if ( (*it)->ID == ID )
-            return (*it);
-    }
-
-    return NULL;
-}
-
-NetUser *ZNDServer::FindUserByName(const std::string &name)
-{
-    for(NetUserList::iterator it = sActiveUsers.begin() ; it != sActiveUsers.end(); it++)
-    {
-        if ( (*it)->name.size() == name.size() )
-        {
-            if ( strcmp((*it)->name.c_str(), name.c_str()) == 0 )
-                return (*it);
-        }
-    }
-
-    return NULL;
-}
-
-
-NetUser *ZNDServer::AllocUser()
-{
-    if (sFreeUsers.empty())
-        return NULL;
-
-    NetUser *usr = sFreeUsers.front();
-    sFreeUsers.pop_front();
-
-    sActiveUsers.push_back(usr);
-
-    return usr;
-}
-
-void ZNDServer::FreeUser(NetUser *usr)
-{
-    if (!usr)
-        return;
-
-    sActiveUsers.remove(usr);
-    sFreeUsers.push_back(usr);
-
-    usr->status = NetUser::STATUS_DISCONNECTED;
-}
 
 void ZNDServer::SendConnErr(const IPaddress &addr, uint8_t type)
 {

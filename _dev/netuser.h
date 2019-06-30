@@ -5,6 +5,8 @@
 #include <list>
 #include <string>
 
+#include "utils.h"
+
 namespace ZNDNet
 {
 
@@ -33,6 +35,7 @@ struct NetUser
 
     int32_t __idx;
 
+    void *__master;
 
     NetUser()
     {
@@ -52,6 +55,7 @@ struct NetUser
         seqid = 0;
 
         __idx = -1;
+        __master = NULL;
     };
 
     inline bool IsOnline()
@@ -67,6 +71,127 @@ struct NetUser
 
 typedef std::list<NetUser *> NetUserList;
 typedef std::deque<NetUser *> NetUserQueue;
+
+class NetUsersPack
+{
+public:
+    NetUsersPack(uint32_t allocUsers)
+    : maxUsers(allocUsers)
+    {
+        users = new NetUser[maxUsers];
+
+        Init();
+    }
+
+    ~NetUsersPack()
+    {
+        delete[] users;
+    }
+
+    NetUser *Alloc()
+    {
+        if (freeUsers.empty())
+            return NULL;
+
+        NetUser *usr = freeUsers.front();
+        freeUsers.pop_front();
+
+        activeUsers.push_back(usr);
+
+        return usr;
+    }
+
+    void Free(NetUser *usr)
+    {
+        if (!usr || usr->__master != this)
+            return;
+
+        activeUsers.remove(usr);
+        freeUsers.push_back(usr);
+
+        usr->status = NetUser::STATUS_DISCONNECTED;
+    }
+
+    NetUser *FindByIP(const IPaddress &addr)
+    {
+        for(NetUserList::iterator it = activeUsers.begin() ; it != activeUsers.end(); it++)
+        {
+            if ( IPCMP((*it)->addr, addr) )
+                return (*it);
+        }
+
+        return NULL;
+    }
+
+    NetUser *FindByID(uint64_t ID)
+    {
+        for(NetUserList::iterator it = activeUsers.begin() ; it != activeUsers.end(); it++)
+        {
+            if ( (*it)->ID == ID )
+                return (*it);
+        }
+
+        return NULL;
+    }
+
+    NetUser *FindByName(const std::string &name)
+    {
+        for(NetUserList::iterator it = activeUsers.begin() ; it != activeUsers.end(); it++)
+        {
+            if ( (*it)->name.size() == name.size() )
+            {
+                if ( strcmp((*it)->name.c_str(), name.c_str()) == 0 )
+                    return (*it);
+            }
+        }
+
+        return NULL;
+    }
+
+    void Init()
+    {
+        activeUsers.clear();
+        freeUsers.clear();
+
+        for(uint32_t i = 0; i < maxUsers; i++)
+        {
+            NetUser *usr = &users[i];
+            usr->__idx = i;
+            usr->__master = this;
+
+            freeUsers.push_back(usr);
+        }
+    }
+
+    inline NetUserList::iterator begin()
+    {
+        return activeUsers.begin();
+    }
+
+    inline NetUserList::iterator end()
+    {
+        return activeUsers.end();
+    }
+
+    inline NetUserList::iterator erase(NetUserList::iterator &it)
+    {
+        NetUser *usr = *it;
+        if (usr->__master == this)
+        {
+            freeUsers.push_back(usr);
+            return activeUsers.erase(it);
+        }
+
+        return ++it;
+    }
+
+protected:
+    const uint32_t maxUsers;
+
+    NetUser     *users;
+    NetUserList  activeUsers;
+    NetUserQueue freeUsers;
+};
 
 };
 

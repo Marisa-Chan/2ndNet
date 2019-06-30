@@ -28,10 +28,6 @@ protected:
     static int _SendThread(void *data);
     static int _UpdateThread(void *data);
 
-
-
-    void InitUsers();
-
     void SendConnected(NetUser *usr);
 
     void SendLeaderStatus(NetUser *usr, bool lead);
@@ -40,7 +36,7 @@ protected:
     void SendPing(NetUser *usr);
     void SendDisconnect(NetUser *usr);
 
-    void DisconnectUser(NetUser *usr, bool free);
+    void DisconnectUser(NetUser *usr);
 
     NetSession *SessionFind(uint64_t _ID);
     NetSession *SessionFind(const std::string &name);
@@ -60,13 +56,6 @@ protected:
     RefData *USRDataGenGamesList();
     RefData *SYSDataGenSesLeave(int8_t type);
 
-    NetUser *FindUserByIP(const IPaddress &addr);
-    NetUser *FindUserByID(uint64_t ID);
-
-    NetUser *AllocUser();
-    void FreeUser(NetUser *usr);
-
-    NetUser *FindUserByName(const std::string &_name);
     void SendConnErr(const IPaddress &addr, uint8_t type);
 
 
@@ -76,11 +65,10 @@ protected:
 // Data
 public:
 protected:
-    NetUser     *sUsers;
-    NetUserList  sActiveUsers;
-    NetUserQueue sFreeUsers;
+    NetUsersPack users;
 
     NetSession    sLobby;
+    NetSessionMap sessions;
 };
 
 
