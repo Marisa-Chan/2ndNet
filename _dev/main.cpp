@@ -6,7 +6,7 @@
 #include "test/crc32.h"
 
 
-#if !defined(SEPARATE_TEST_CLIENT) && !defined(SEPARATE_TEST_SERVER)
+#if !defined(SEPARATE_TEST_CLIENT) && !defined(SEPARATE_TEST_SERVER) && !defined(SEPARATE_TEST_SINGLE)
 int main()
 {
     SDL_Init(0);
@@ -196,6 +196,12 @@ int main(int argc, const char *argv[])
                     }
                     break;
 
+                case ZNDNet::EVENT_USER_LIST:
+                    {
+                        printf("User list\n");
+                    }
+                    break;
+
                 default:
                     printf("Msg %d %d\n", evt->type, evt->value);
                     break;
@@ -353,6 +359,172 @@ int main()
 
     serv->Start(61234);
     sleep(600);
+
+
+    return 0;
+}
+#elif defined(SEPARATE_TEST_SINGLE)
+int main()
+{
+    SDL_Init(0);
+    ZNDNet::ZNDSingle * serv = new ZNDNet::ZNDSingle("TestServer");
+
+    serv->Start("JOJO", 61234, "My mega Server", 0);
+    bool run = true;
+
+    int32_t ps = 0;
+    char cmdbuf[1024];
+
+    while(run)
+    {
+        for(ZNDNet::Event *evt = serv->Events_Pop(); evt != NULL; evt = serv->Events_Pop())
+        {
+            switch( evt->type )
+            {
+                case ZNDNet::EVENT_DATA:
+                    {
+                        ZNDNet::EventData *dat = (ZNDNet::EventData *)evt;
+                        printf("Recieve data sz %d from %x, crc %x\n", dat->size, (uint32_t)dat->from, crc32(dat->data, dat->size, 0) );
+
+                    }
+                    break;
+
+                case ZNDNet::EVENT_USER_ADD:
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+                        printf("User join %s (%" PRIx64 ")\n", dat->name.c_str(), dat->id );
+                    }
+                    break;
+
+                case ZNDNet::EVENT_USER_LEAVE:
+                    {
+                        ZNDNet::EventNameID *dat = (ZNDNet::EventNameID *)evt;
+                        printf("User leave %s (%x)\n", dat->name.c_str(), (uint32_t)dat->id );
+                    }
+                    break;
+
+                case ZNDNet::EVENT_USER_LIST:
+                    {
+                        printf("User list\n");
+                    }
+                    break;
+
+                case ZNDNet::EVENT_DISCONNECT:
+                    {
+                        printf("Disconnect %d\n", evt->value);
+                        serv->Stop();
+                        run = false;
+                    }
+                    break;
+
+                default:
+                    printf("Msg %d %d\n", evt->type, evt->value);
+                    break;
+            }
+            delete evt;
+        }
+
+        if (kbhit())
+        {
+            int c = getch();
+
+            if (c != 0)
+            {
+                if (c == '\n')
+                {
+                    printf("ENTER\n");
+                    cmdbuf[ps] = 0;
+
+                    if (strncasecmp(cmdbuf, "users", 5) == 0)
+                    {
+                        ZNDNet::UserInfoVect usrs;
+                        serv->GetUsers(usrs);
+
+                        for(int i = 0; i < usrs.size(); i++)
+                        {
+                            printf("\tUser list: %s\t\t%" PRIx64 "\n", usrs[i].name.c_str(), usrs[i].ID);
+                        }
+                    }
+                    else if (strncasecmp(cmdbuf, "show", 4) == 0)
+                    {
+                        serv->ShowSession(true);
+                    }
+                    else if (strncasecmp(cmdbuf, "hide", 4) == 0)
+                    {
+                        serv->ShowSession(false);
+                    }
+                    else if (strncasecmp(cmdbuf, "close", 5) == 0)
+                    {
+                        std::string str = cmdbuf + 5;
+                        serv->CloseSession(atoi(str.c_str()));
+                    }
+                    else if (strncasecmp(cmdbuf, "kick", 4) == 0)
+                    {
+                        std::string str = cmdbuf + 5;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        ZNDNet::UserInfo inf;
+
+                        if (serv->GetUser(inf, str.c_str()))
+                        {
+                            serv->KickUser(inf.ID);
+                        }
+                    }
+                    else if (strncasecmp(cmdbuf, "quit", 4) == 0)
+                    {
+                        run = false;
+                    }
+                    else if (strncasecmp(cmdbuf, "cast", 4) == 0)
+                    {
+                        uint8_t *tmp = new uint8_t[10240];
+                        for (int32_t i = 0; i < 10240; i++)
+                            tmp[i] = rand() % 0xFF;
+
+                        serv->BroadcastData(tmp, 10240);
+                        printf("Sended data %x\n", crc32(tmp, 10240, 0) );
+
+                        delete[] tmp;
+                    }
+                    else if (strncasecmp(cmdbuf, "uni", 3) == 0)
+                    {
+                        std::string str = cmdbuf + 4;
+                        while (str.back() == '\r' || str.back() == '\n')
+                            str.pop_back();
+
+                        ZNDNet::UserInfoVect usrs;
+                        serv->GetUsers(usrs);
+
+                        for(int i = 0; i < usrs.size(); i++)
+                        {
+                            if ( strcasecmp( usrs[i].name.c_str(), str.c_str()) == 0 )
+                            {
+                                uint8_t *tmp = new uint8_t[1024];
+                                for (int32_t i = 0; i < 1024; i++)
+                                    tmp[i] = rand() % 0xFF;
+
+                                serv->SendData(usrs[i].ID, tmp, 1024);
+                                printf("Sended data to %s crc %x\n", usrs[i].name.c_str(), crc32(tmp, 1024, 0) );
+
+                                delete[] tmp;
+                                break;
+                            }
+                        }
+                    }
+
+                    ps = 0;
+                }
+                else
+                {
+                    cmdbuf[ps++] = c;
+                }
+            }
+        }
+
+
+        SDL_Delay(10);
+    }
+    //sleep(600);
 
 
     return 0;

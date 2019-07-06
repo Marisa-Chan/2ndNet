@@ -7,11 +7,11 @@ int ZNDServer::_RecvThread(void *data)
 {
     ZNDServer *_this = (ZNDServer *)data;
 
-    UDPpacket *inpkt[ZNDNET_TUNE_RECV_PKTS + 1];
+    UDPpacket *inpkt[ZNDNET_TUNE_MAXPKTS + 1];
 
     if (_this)
     {
-        for (int i = 0; i < ZNDNET_TUNE_RECV_PKTS; i++)
+        for (int i = 0; i < ZNDNET_TUNE_MAXPKTS; i++)
         {
             inpkt[i] = new UDPpacket;
             inpkt[i]->data = new uint8_t[ZNDNET_BUFF_SIZE];
@@ -19,7 +19,7 @@ int ZNDServer::_RecvThread(void *data)
             inpkt[i]->channel = -1;
         }
 
-        inpkt[ZNDNET_TUNE_RECV_PKTS] = NULL;
+        inpkt[ZNDNET_TUNE_MAXPKTS] = NULL;
 
         while (!_this->threadsEnd)
         {
@@ -32,12 +32,14 @@ int ZNDServer::_RecvThread(void *data)
                     InRawPkt *pkt = new InRawPkt(inpkt[i]);
                     _this->Recv_PushInRaw(pkt);
                 }
-            }
 
-            SDL_Delay(0);
+                SDL_Delay( ZNDNET_TUNE_MAXDELAY - ( ZNDNET_TUNE_MAXDELAY * numrecv / ZNDNET_TUNE_MAXPKTS ) );
+            }
+            else
+                SDL_Delay(ZNDNET_TUNE_MAXDELAY);
         }
 
-        for (int i = 0; i < ZNDNET_TUNE_RECV_PKTS; i++)
+        for (int i = 0; i < ZNDNET_TUNE_MAXPKTS; i++)
         {
             delete[] inpkt[i]->data;
             delete inpkt[i];
@@ -55,6 +57,7 @@ int ZNDServer::_SendThread(void *data)
     uint8_t *sendBuffer;
     uint32_t *syncThings;
     uint32_t loop = 1;
+    bool lastloop = false;
     UDPpacket pkt;
 
     if (_this)
@@ -67,14 +70,17 @@ int ZNDServer::_SendThread(void *data)
         pkt.maxlen = ZNDNET_BUFF_SIZE;
         pkt.channel = -1;
 
-        while (!_this->threadsEnd)
+        while (!_this->threadsEnd || !lastloop)
         {
+            if (_this->threadsEnd)
+                lastloop = true;
+
             if (SDL_LockMutex(_this->sendModifyMutex) == 0)
             {
                 SendingList::iterator it = _this->sendPktList.begin();
                 size_t sendedBytes = 0;
 
-                while(it != _this->sendPktList.end() && !_this->threadsEnd)
+                while(it != _this->sendPktList.end() && (!_this->threadsEnd || lastloop))
                 {
                     if (sendedBytes >= ZNDNET_TUNE_SEND_MAXDATA)
                     {
@@ -83,6 +89,15 @@ int ZNDServer::_SendThread(void *data)
                     }
 
                     SendingData* dta = (*it);
+
+                    if (lastloop) //Skip not system packets
+                    {
+                        if (!(dta->flags & PKT_FLAG_SYSTEM))
+                        {
+                            it++;
+                            continue;
+                        }
+                    }
 
                     if (dta->flags & PKT_FLAG_SYSTEM)
                     {
@@ -172,10 +187,16 @@ int ZNDServer::_SendThread(void *data)
             }
 
             loop++;
+
             if (_this->sendPktList.size())
-                SDL_Delay(0);
+            {
+                if ( _this->sendPktList.size() > ZNDNET_TUNE_MAXPKTS)
+                    SDL_Delay( 0 );
+                else
+                    SDL_Delay( ZNDNET_TUNE_MAXDELAY - (ZNDNET_TUNE_MAXDELAY * _this->sendPktList.size() / ZNDNET_TUNE_MAXPKTS));
+            }
             else
-                SDL_Delay(5);
+                SDL_Delay(ZNDNET_TUNE_MAXDELAY);
         }
 
         delete[] sendBuffer;
@@ -192,6 +213,8 @@ int ZNDServer::_UpdateThread(void *data)
 
     while (!_this->threadsEnd)
     {
+        uint32_t pktsRecv = 0;
+
         if (SDL_LockMutex(_this->eSyncMutex) == 0)
         {
             uint64_t forceBrake = _this->ttime.GetTicks() + TIMEOUT_SRV_RECV_MAX;
@@ -200,6 +223,8 @@ int ZNDServer::_UpdateThread(void *data)
                 InRawPkt *ipkt = _this->Recv_PopInRaw();
                 if (!ipkt)
                     break; // If no more packets -> do another things
+
+                pktsRecv++;
 
                 Pkt * pkt = _this->Recv_PreparePacket(ipkt);
                 if (pkt)
@@ -224,7 +249,10 @@ int ZNDServer::_UpdateThread(void *data)
             SDL_UnlockMutex(_this->eSyncMutex);
         }
 
-        SDL_Delay(1);
+        if (pktsRecv > ZNDNET_TUNE_MAXPKTS)
+            SDL_Delay(1);
+        else
+            SDL_Delay(1 + ZNDNET_TUNE_MAXDELAY - ZNDNET_TUNE_MAXDELAY * pktsRecv / ZNDNET_TUNE_MAXPKTS);
     }
 
     SDL_WaitThread(_this->recvThread, NULL);

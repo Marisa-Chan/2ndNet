@@ -45,7 +45,7 @@ void ZNDServer::SessionDelete(uint64_t ID)
     }
 }
 
-void ZNDServer::SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
+void ZNDNet::SrvSessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
 {
     if (!ses || !dat)
         return;
@@ -55,7 +55,7 @@ void ZNDServer::SessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, u
         for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
         {
             NetUser *usr = *it;
-            if (usr && usr != from && usr->IsOnline())
+            if (usr && usr != from && usr->net && usr->IsOnline())
             {
                 SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, flags);
                 dta->SetChannel(usr->__idx, chnl);
@@ -75,37 +75,25 @@ void ZNDServer::SessionListUsers(NetUser *usr)
         return;
 
     NetSession *ses = SessionFind(usr->sesID);
-    if (ses && !ses->lobby)
+    if (ses)
     {
-        RefDataWStream *dat = RefDataWStream::create();
-        dat->writeU8(USR_MSG_SES_USERLIST);
-        dat->writeU32(ses->users.size());
-
-        for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
-        {
-//            if ( ses->lead ==  (*it))
-//                dat->writeU8(1);
-//            else
-//                dat->writeU8(0);
-            dat->writeU64( (*it)->ID );
-            dat->writeSzStr( (*it)->name );
-        }
-
-        Send_PushData( MkSendingData(usr, dat, 0, 0) ); //Send it in sync System channel
+        RefData *dat = SrvDataGenUserList(ses);
+        if (dat)
+            Send_PushData( MkSendingData(usr, dat, 0, 0) ); //Send it in sync System channel
     }
 }
 
 
 void ZNDServer::SessionDisconnectAllUsers(NetSession *ses, uint8_t type)
 {
-    if (ses && ses != &sLobby)
+    if (ses && !ses->lobby)
     {
         if (SDL_LockMutex(sendPktListMutex) == 0)
         {
+            RefData *dat = SYSDataGenSesLeave(type);
+
             for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it = ses->users.erase(it))
             {
-                RefData *dat = SYSDataGenSesLeave(type);
-
                 NetUser *usr = *it;
                 if (usr)
                 {
@@ -148,8 +136,8 @@ void ZNDServer::SessionUserLeave(NetUser *usr, uint8_t type)
             if (!sold->users.empty()) // If anybody is alive
             {
                 // Make packets for another users about usr is leave
-                RefData *datLeave = USRDataGenUserLeave(usr, type);
-                SessionBroadcast(sold, datLeave, 0, 0, usr); //Send it in sync System channel
+                RefData *datLeave = SrvDataGenUserLeave(usr, type);
+                SrvSessionBroadcast(sold, datLeave, 0, 0, usr); //Send it in sync System channel
             }
 
             if (sold->lead == usr) // Oh my... this luser was a leader
@@ -185,17 +173,17 @@ void ZNDServer::DoSessionUserJoin(NetUser *usr, NetSession *ses)
     {
         if (!ses->users.empty())
         {
-            RefData *dat = USRDataGenUserJoin(usr);
-            SessionBroadcast(ses, dat, 0, 0, usr); //Send it in sync System channel
+            RefData *dat = SrvDataGenUserJoin(usr);
+            SrvSessionBroadcast(ses, dat, 0, 0, usr); //Send it in sync System channel
         }
 
         if (!ses->lead)
         {
             ses->lead = usr;
-            SendSessionJoin(usr, ses, true);
+            SrvSendSessionJoin(usr, ses, true);
         }
         else
-            SendSessionJoin(usr, ses, false);
+            SrvSendSessionJoin(usr, ses, false);
     }
 
     usr->sesID = ses->ID;

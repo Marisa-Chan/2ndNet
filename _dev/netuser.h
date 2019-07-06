@@ -4,6 +4,7 @@
 #include <deque>
 #include <list>
 #include <string>
+#include <vector>
 
 #include "utils.h"
 
@@ -35,6 +36,7 @@ struct NetUser
 
     int32_t __idx;
 
+    bool net;
     void *__master;
 
     NetUser()
@@ -56,6 +58,8 @@ struct NetUser
 
         __idx = -1;
         __master = NULL;
+
+        net = false;
     };
 
     inline bool IsOnline()
@@ -185,6 +189,11 @@ public:
         return ++it;
     }
 
+    inline uint32_t size()
+    {
+        return activeUsers.size();
+    }
+
 protected:
     const uint32_t maxUsers;
 
@@ -192,6 +201,31 @@ protected:
     NetUserList  activeUsers;
     NetUserQueue freeUsers;
 };
+
+
+struct UserInfo
+{
+    uint64_t    ID;
+    std::string name;
+    bool        lead;
+
+    UserInfo& operator= (const UserInfo& x)
+    {
+        ID = x.ID;
+        name = x.name;
+        lead = x.lead;
+        return *this;
+    };
+
+    UserInfo& operator= (const NetUser& x)
+    {
+        ID = x.ID;
+        name = x.name;
+        lead = false;
+        return *this;
+    };
+};
+typedef std::vector<UserInfo> UserInfoVect;
 
 };
 

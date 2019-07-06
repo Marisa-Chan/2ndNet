@@ -21,7 +21,8 @@
 #define ZNDNET_USER_SCHNLS   2          // Minimum 2 (0 - always system synced, 1+ user channels)
 #define ZNDNET_SYNC_CHANNELS (ZNDNET_USERS_MAX * ZNDNET_USER_SCHNLS)
 
-#define ZNDNET_TUNE_RECV_PKTS    16     // Maximum packets that will be polled at once
+#define ZNDNET_TUNE_MAXDELAY 10
+#define ZNDNET_TUNE_MAXPKTS    16     // Maximum packets that will be polled at once
 #define ZNDNET_TUNE_SEND_DELAY   1      // millisecond
 #define ZNDNET_TUNE_SEND_MAXDATA 13107  // how many bytes can be sent before force delay (13107 ~bytes per 1ms on 100Mbit/s)
 // High load
@@ -145,6 +146,21 @@ protected:
     void SendRetry(uint32_t _seqid, const IPaddress &addr, uint32_t nextOff, uint32_t upto);
 
     static uint8_t PrepareOutPacket(SendingData &dat, UDPpacket &out);
+
+
+    void SrvSendConnected(NetUser *usr, bool multisession);
+    void SrvSendConnErr(const IPaddress &addr, uint8_t type);
+
+    void SrvSendSessionJoin(NetUser *usr, NetSession *ses, bool leader);
+
+    void SrvSessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl = 0, NetUser *from = NULL);
+
+    RefData *SrvDataGenUserJoin(NetUser *usr);
+    RefData *SrvDataGenUserList(NetSession *ses);
+    RefData *SrvDataGenUserLeave(NetUser *usr, uint8_t type);
+
+    void SrvSendPing(NetUser *usr);
+    void SrvSendDisconnect(NetUser *usr);
 
 
     uint64_t GenerateID();

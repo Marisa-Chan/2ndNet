@@ -130,7 +130,7 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
 
                     if (cnt == 100)
                     {
-                        SendConnErr(pkt->addr, ERR_CONN_NAME);
+                        SrvSendConnErr(pkt->addr, ERR_CONN_NAME);
                         return;
                     }
                 }
@@ -141,7 +141,7 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
 
             if (usr == NULL) // No free space
             {
-                SendConnErr(pkt->addr, ERR_CONN_FULL);
+                SrvSendConnErr(pkt->addr, ERR_CONN_FULL);
                 return;
             }
             usr->addr = pkt->addr;
@@ -154,10 +154,11 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
             usr->name = nm;
             usr->latence = 0;
             usr->sesID = 0;
+            usr->net = true;
 
             //sLobby.users.push_back(usr);
             //usr->sesID = sLobby.ID;
-            SendConnected(usr);
+            SrvSendConnected(usr, true);
             UserToLobby(usr, 0);
         }
     }
@@ -377,7 +378,7 @@ void ZNDServer::ProcessSystemPkt(Pkt* pkt)
                                     printf("CLS User %s %d\n", (*it)->name.c_str(), (*it)->status);
                                 }
 
-                                SessionBroadcast(ses, dat, PKT_FLAG_SYSTEM, 0, NULL);
+                                SrvSessionBroadcast(ses, dat, PKT_FLAG_SYSTEM, 0, NULL);
                             }
                         }
                     }
@@ -429,7 +430,7 @@ void ZNDServer::ProcessRegularPkt(Pkt* pkt)
                         if (ses)
                         {
                             RefData *dat = USRDataGenData(from, true, to, pkt->data + 1 + rd.tell(), sz);
-                            SessionBroadcast(ses, dat,  pkt->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC),  pkt->uchnl, pkt->user);
+                            SrvSessionBroadcast(ses, dat,  pkt->flags & (PKT_FLAG_GARANT | PKT_FLAG_ASYNC),  pkt->uchnl, pkt->user);
                         }
                     }
 
@@ -462,20 +463,7 @@ void ZNDServer::Start(uint16_t port)
 
 
 
-void ZNDServer::SendConnected(NetUser *usr)
-{
-    if (!usr)
-        return;
 
-    RefDataWStream *strm = RefDataWStream::create();
-
-    strm->writeU8(SYS_MSG_CONNECTED);
-    strm->writeU8(1); //has lobby
-    strm->writeU64(usr->ID);
-    strm->writeSzStr(usr->name);
-
-    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
-}
 
 void ZNDServer::SendLeaderStatus(NetUser *usr, bool lead)
 {
@@ -491,48 +479,7 @@ void ZNDServer::SendLeaderStatus(NetUser *usr, bool lead)
     Send_PushData(dta);
 }
 
-void ZNDServer::SendSessionJoin(NetUser *usr, NetSession *ses, bool leader)
-{
-    if (!usr || !ses)
-        return;
 
-    RefDataWStream *dat = RefDataWStream::create();
-    dat->writeU8(SYS_MSG_SES_JOIN);
-    dat->writeU8(leader ? 1 : 0);
-    dat->writeU64(ses->ID);
-    dat->writeSzStr(ses->name);
-
-    SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
-    dta->SetChannel(usr->__idx, 0);
-    Send_PushData(dta);
-}
-
-
-
-
-RefData *ZNDServer::USRDataGenUserLeave(NetUser *usr, uint8_t type)
-{
-    if (!usr)
-        return NULL;
-
-    RefDataWStream *dat = RefDataWStream::create();
-    dat->writeU8(USR_MSG_SES_USERLEAVE);
-    dat->writeU64(usr->ID);
-    dat->writeU8(type);
-    return dat;
-}
-
-RefData *ZNDServer::USRDataGenUserJoin(NetUser *usr)
-{
-    if (!usr)
-        return NULL;
-
-    RefDataWStream *dat = RefDataWStream::create();
-    dat->writeU8(USR_MSG_SES_USERJOIN);
-    dat->writeU64(usr->ID);
-    dat->writeSzStr(usr->name);
-    return dat;
-}
 
 RefData *ZNDServer::USRDataGenGamesList()
 {
@@ -563,30 +510,9 @@ RefData *ZNDServer::USRDataGenGamesList()
 }
 
 
-void ZNDServer::SendPing(NetUser *usr)
-{
-    if (!usr)
-        return;
 
-    RefDataWStream *strm = RefDataWStream::create();
 
-    strm->writeU8(SYS_MSG_PING);
-    strm->writeU32(usr->pingSeq);
 
-    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
-}
-
-void ZNDServer::SendDisconnect(NetUser *usr)
-{
-    if (!usr)
-        return;
-
-    RefDataWStream *strm = RefDataWStream::create();
-
-    strm->writeU8(SYS_MSG_DISCONNECT);
-
-    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
-}
 
 void ZNDServer::DisconnectUser(NetUser *usr)
 {
@@ -597,9 +523,9 @@ void ZNDServer::DisconnectUser(NetUser *usr)
     Confirm_Clear(usr->addr);
     Pending_Clear(usr->addr);
 
-    SessionUserLeave(usr);
+    SessionUserLeave(usr, 1);
 
-    SendDisconnect(usr); //Send to user disconnect msg
+    SrvSendDisconnect(usr); //Send to user disconnect msg
 
     usr->status = NetUser::STATUS_DISCONNECTED;
 }
@@ -615,7 +541,7 @@ void ZNDServer::InterprocessUpdate()
 
         if (usr)
         {
-            if (usr->IsOnline())
+            if (usr->net && usr->IsOnline())
             {
                 if (curTime > usr->pongTime + TIMEOUT_USER)
                 {
@@ -634,7 +560,7 @@ void ZNDServer::InterprocessUpdate()
                     {
                         usr->pingTime = curTime;
                         usr->pingSeq++;
-                        SendPing(usr);
+                        SrvSendPing(usr);
                     }
                 }
             }
@@ -671,16 +597,6 @@ void ZNDServer::InterprocessUpdate()
     PendingCheck(); // Delete timeout packets
     ConfirmQueueCheck();
 
-}
-
-
-void ZNDServer::SendConnErr(const IPaddress &addr, uint8_t type)
-{
-    RefDataWStream *strm = RefDataWStream::create(4);
-    strm->writeU8(SYS_MSG_CONNERR);
-    strm->writeU8(type);
-
-    Send_PushData( new SendingData(addr, 0, strm, PKT_FLAG_SYSTEM) );
 }
 
 

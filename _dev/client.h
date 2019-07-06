@@ -29,21 +29,7 @@ struct SessionInfo
 typedef std::vector<SessionInfo> SessionInfoVect;
 
 
-struct UserInfo
-{
-    uint64_t    ID;
-    std::string name;
-    bool        lead;
 
-    UserInfo& operator= (const UserInfo& x)
-    {
-        ID = x.ID;
-        name = x.name;
-        lead = x.lead;
-        return *this;
-    };
-};
-typedef std::vector<UserInfo> UserInfoVect;
 
 
 

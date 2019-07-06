@@ -3,9 +3,9 @@
 namespace ZNDNet
 {
 
-int ZNDClient::_RecvThread(void *data)
+int ZNDSingle::_RecvThread(void *data)
 {
-    ZNDClient *_this = (ZNDClient *)data;
+    ZNDSingle *_this = (ZNDSingle *)data;
 
     UDPpacket *inpkt[ZNDNET_TUNE_MAXPKTS + 1];
 
@@ -29,10 +29,8 @@ int ZNDClient::_RecvThread(void *data)
             {
                 for(int i = 0; i < numrecv; i++)
                 {
-                    //InRawPkt *pkt = new InRawPkt(inpkt[i]);
-                    //_this->Recv_PushInRaw(pkt);
-                    if ( IPCMP(inpkt[i]->address, _this->cServAddress) )
-                        _this->Recv_PushInRaw( new InRawPkt(inpkt[i]) );
+                    InRawPkt *pkt = new InRawPkt(inpkt[i]);
+                    _this->Recv_PushInRaw(pkt);
                 }
 
                 SDL_Delay( ZNDNET_TUNE_MAXDELAY - ( ZNDNET_TUNE_MAXDELAY * numrecv / ZNDNET_TUNE_MAXPKTS ) );
@@ -52,27 +50,28 @@ int ZNDClient::_RecvThread(void *data)
 }
 
 
-int ZNDClient::_SendThread(void *data)
+int ZNDSingle::_SendThread(void *data)
 {
-    ZNDClient *_this = (ZNDClient *)data;
+    ZNDSingle *_this = (ZNDSingle *)data;
 
     uint8_t *sendBuffer;
+    uint32_t *syncThings;
     uint32_t loop = 1;
     bool lastloop = false;
     UDPpacket pkt;
+    const uint32_t SES_CHANNELS = ZNDNET_SES_USERS_MAX * ZNDNET_USER_SCHNLS;
 
     if (_this)
     {
         sendBuffer = new uint8_t[ZNDNET_BUFF_SIZE];
-
-        uint32_t syncThings[ZNDNET_USER_SCHNLS + 1]; // +extra channel for incorrect channels
-        memset(syncThings, 0, (ZNDNET_USER_SCHNLS + 1) * sizeof(uint32_t));
+        syncThings = new uint32_t[SES_CHANNELS + 1]; // +extra channel for incorrect channels
+        memset(syncThings, 0, (SES_CHANNELS + 1) * sizeof(uint32_t));
 
         pkt.data = sendBuffer;
         pkt.maxlen = ZNDNET_BUFF_SIZE;
         pkt.channel = -1;
 
-        while (!_this->threadsEnd || !lastloop)
+        while ( !_this->threadsEnd || !lastloop)
         {
             if (_this->threadsEnd)
                 lastloop = true;
@@ -118,10 +117,10 @@ int ZNDClient::_SendThread(void *data)
                     }
                     else
                     {
-                        uint32_t syncID = dta->uchnl;
+                        uint32_t syncID = dta->schnl;
 
-                        if (syncID == PKT_CHNL_NOT_SET || syncID > ZNDNET_USER_SCHNLS)
-                            syncID = ZNDNET_USER_SCHNLS;
+                        if (syncID == PKT_NO_CHANNEL || syncID > SES_CHANNELS)
+                            syncID = SES_CHANNELS;
 
                         bool async = (dta->schnl == PKT_NO_CHANNEL) || (dta->flags & PKT_FLAG_ASYNC);
 
@@ -202,39 +201,39 @@ int ZNDClient::_SendThread(void *data)
         }
 
         delete[] sendBuffer;
+        delete[] syncThings;
     }
 
     return 0;
 }
 
 
-
-int ZNDClient::_UpdateThread(void *data)
+int ZNDSingle::_UpdateThread(void *data)
 {
-    ZNDClient *_this = (ZNDClient *)data;
+    ZNDSingle *_this = (ZNDSingle *)data;
 
     while (!_this->threadsEnd)
     {
         uint32_t pktsRecv = 0;
 
-        if (SDL_LockMutex(_this->eSyncMutex) == 0)
+        uint64_t forceBrake = _this->ttime.GetTicks() + TIMEOUT_CLI_RECV_MAX;
+
+        //This type is needed often work with client-side things -> do sync locks for every packet.
+        while (_this->ttime.GetTicks() < forceBrake)
         {
-            uint64_t forceBrake = _this->ttime.GetTicks() + TIMEOUT_CLI_RECV_MAX;
-            while (_this->ttime.GetTicks() < forceBrake)
+            InRawPkt *ipkt = _this->Recv_PopInRaw();
+            if (!ipkt)
+                break; // If no more packets -> do another things
+
+            pktsRecv++;
+
+            Pkt * pkt = _this->Recv_PreparePacket(ipkt);
+            if (pkt)
             {
-                InRawPkt *ipkt = _this->Recv_PopInRaw();
-                if (!ipkt)
-                    break; // If no more packets -> do another things
-
-                pktsRecv++;
-
-                Pkt * pkt = _this->Recv_PreparePacket(ipkt);
-                if (pkt)
+                if (SDL_LockMutex(_this->eSyncMutex) == 0)
                 {
                     if (pkt->flags & PKT_FLAG_SYSTEM)
-                    {
                         _this->ProcessSystemPkt(pkt);
-                    }
                     else
                     {
                         if (pkt->flags & PKT_FLAG_GARANT)
@@ -242,13 +241,16 @@ int ZNDClient::_UpdateThread(void *data)
 
                         _this->ProcessRegularPkt(pkt);
                     }
+                    SDL_UnlockMutex(_this->eSyncMutex);
 
                     delete pkt;
                 }
             }
+        }
 
+        if (SDL_LockMutex(_this->eSyncMutex) == 0)
+        {
             _this->InterprocessUpdate();
-
             SDL_UnlockMutex(_this->eSyncMutex);
         }
 
@@ -256,7 +258,6 @@ int ZNDClient::_UpdateThread(void *data)
             SDL_Delay(1);
         else
             SDL_Delay(1 + ZNDNET_TUNE_MAXDELAY - ZNDNET_TUNE_MAXDELAY * pktsRecv / ZNDNET_TUNE_MAXPKTS);
-
     }
 
     SDL_WaitThread(_this->recvThread, NULL);
@@ -264,8 +265,6 @@ int ZNDClient::_UpdateThread(void *data)
 
     _this->recvThread = NULL;
     _this->sendThread = NULL;
-
-    _this->cME.status = NetUser::STATUS_DISCONNECTED;
 
     _this->Send_Clear();
     _this->Confirm_Clear();
@@ -275,5 +274,6 @@ int ZNDClient::_UpdateThread(void *data)
 
     return 0;
 }
+
 
 };

@@ -530,4 +530,112 @@ uint8_t ZNDNet::PrepareOutPacket(SendingData &data, UDPpacket &out )
     return 0;
 }
 
+
+void ZNDNet::SrvSendConnected(NetUser *usr, bool multisession)
+{
+    if (!usr)
+        return;
+
+    RefDataWStream *strm = RefDataWStream::create();
+
+    strm->writeU8(SYS_MSG_CONNECTED);
+    strm->writeU8( multisession ? 1 : 0 ); //has lobby
+    strm->writeU64(usr->ID);
+    strm->writeSzStr(usr->name);
+
+    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+void ZNDNet::SrvSendConnErr(const IPaddress &addr, uint8_t type)
+{
+    RefDataWStream *strm = RefDataWStream::create(4);
+    strm->writeU8(SYS_MSG_CONNERR);
+    strm->writeU8(type);
+
+    Send_PushData( new SendingData(addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+RefData *ZNDNet::SrvDataGenUserJoin(NetUser *usr)
+{
+    if (!usr)
+        return NULL;
+
+    RefDataWStream *dat = RefDataWStream::create();
+    dat->writeU8(USR_MSG_SES_USERJOIN);
+    dat->writeU64(usr->ID);
+    dat->writeSzStr(usr->name);
+    return dat;
+}
+
+void ZNDNet::SrvSendSessionJoin(NetUser *usr, NetSession *ses, bool leader)
+{
+    if (!usr || !ses)
+        return;
+
+    RefDataWStream *dat = RefDataWStream::create();
+    dat->writeU8(SYS_MSG_SES_JOIN);
+    dat->writeU8(leader ? 1 : 0);
+    dat->writeU64(ses->ID);
+    dat->writeSzStr(ses->name);
+
+    SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, PKT_FLAG_SYSTEM); // Send, NOW YOU A LEADER!
+    dta->SetChannel(usr->__idx, 0);
+    Send_PushData(dta);
+}
+
+RefData *ZNDNet::SrvDataGenUserList(NetSession *ses)
+{
+    if (!ses || ses->lobby)
+        return NULL;
+
+    RefDataWStream *dat = RefDataWStream::create();
+    dat->writeU8(USR_MSG_SES_USERLIST);
+    dat->writeU32(ses->users.size());
+
+    for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
+    {
+        dat->writeU64( (*it)->ID );
+        dat->writeSzStr( (*it)->name );
+    }
+
+    return dat;
+}
+
+void ZNDNet::SrvSendPing(NetUser *usr)
+{
+    if (!usr)
+        return;
+
+    RefDataWStream *strm = RefDataWStream::create();
+
+    strm->writeU8(SYS_MSG_PING);
+    strm->writeU32(usr->pingSeq);
+
+    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+void ZNDNet::SrvSendDisconnect(NetUser *usr)
+{
+    if (!usr)
+        return;
+
+    RefDataWStream *strm = RefDataWStream::create(4);
+
+    strm->writeU8(SYS_MSG_DISCONNECT);
+
+    Send_PushData( new SendingData(usr->addr, 0, strm, PKT_FLAG_SYSTEM) );
+}
+
+RefData *ZNDNet::SrvDataGenUserLeave(NetUser *usr, uint8_t type)
+{
+    if (!usr)
+        return NULL;
+
+    RefDataWStream *dat = RefDataWStream::create(16);
+    dat->writeU8(USR_MSG_SES_USERLEAVE);
+    dat->writeU64(usr->ID);
+    dat->writeU8(type);
+    return dat;
+}
+
 };

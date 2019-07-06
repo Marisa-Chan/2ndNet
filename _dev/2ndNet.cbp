@@ -56,6 +56,7 @@
 		<Unit filename="session.cpp" />
 		<Unit filename="single.cpp" />
 		<Unit filename="single.h" />
+		<Unit filename="single_threads.cpp" />
 		<Unit filename="test/crc32.cpp" />
 		<Unit filename="test/crc32.h" />
 		<Unit filename="tick.h" />
