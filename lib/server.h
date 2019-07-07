@@ -13,7 +13,6 @@ class ZNDServer: public ZNDNet
 {
 public:
     ZNDServer(const std::string &servstring);
-    ~ZNDServer();
 
     void Start(uint16_t port);
 
@@ -50,7 +49,7 @@ protected:
     RefData *USRDataGenGamesList();
     RefData *SYSDataGenSesLeave(int8_t type);
 
-
+    void SessionClear();
 
 // Data
 public:

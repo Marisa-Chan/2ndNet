@@ -27,8 +27,6 @@ Pkt *ZNDClient::Recv_PreparePacket(InRawPkt *pkt)
     }
     else
     {
-        //printf("Client: Normal parse seq %d len %d\n", pkt->hdr.seqid, (int)pkt->hdr.datasz);
-
         if (pkt->hdr.flags & PKT_FLAG_PART) // incomplete data, do assembly
         {
             AddrSeq ipseq(pkt->addr, pkt->hdr.seqid);
@@ -50,13 +48,10 @@ Pkt *ZNDClient::Recv_PreparePacket(InRawPkt *pkt)
                 pendingPkt.push_back(parted);
             }
 
-            //if (pkt->hdr.seqid == 0)
-            //    printf("Parted recv %d/%d\n", parted->nextOff, parted->len);
-
             if ( parted->Feed(pkt, ttime.GetTicks()) ) // Is complete?
             {
-                if (parted->retry != RETRY_GARANT)
-                    printf("Recovered packet! %d\n", parted->ipseq.seq);
+                /*if (parted->retry != RETRY_GARANT)
+                    printf("Recovered packet! %d\n", parted->ipseq.seq);*/
 
                 pendingPkt.remove(parted);
                 return new Pkt(parted, NULL);
@@ -100,8 +95,6 @@ void ZNDClient::ProcessSystemPkt(Pkt* pkt)
                     Events_Push( new EventNameID(EVENT_CONNECTED, cServHasLobby, cME.name, cME.ID) );
 
                     cTimeOut = ttime.GetTicks() + TIMEOUT_USER;
-                    //printf("\t\tCONNECTED %" PRIx64 " %s\n", ID, nm.c_str() );
-                    //Cli_RequestGamesList(); // DEVTEST
                 }
             }
             break;
@@ -154,8 +147,6 @@ void ZNDClient::ProcessSystemPkt(Pkt* pkt)
                 rfdat->writeU8(SYS_MSG_PING);
                 rfdat->writeU32(seq);
 
-                //printf("Cli %s ping %d\n", cME.name.c_str(), seq);
-
                 Send_PushData( new SendingData(cServAddress, 0, rfdat, PKT_FLAG_SYSTEM) );
 
                 cTimeOut = ttime.GetTicks() + TIMEOUT_USER;
@@ -201,7 +192,6 @@ void ZNDClient::ProcessSystemPkt(Pkt* pkt)
             break;
 
         default:
-            //printf("Client: Getted unk SYS msg %X\n", pkt->data[0]);
             break;
     }
 }
@@ -324,7 +314,6 @@ void ZNDClient::ProcessRegularPkt(Pkt* pkt)
             break;
 
         default:
-            //printf("Client: Getted unk USR msg %X\n", pkt->data[0]);
             break;
     }
 }

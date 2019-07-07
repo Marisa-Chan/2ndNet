@@ -1,5 +1,4 @@
 #include "zndNet.h"
-#include <regex>
 
 namespace ZNDNet
 {
@@ -45,26 +44,7 @@ void ZNDServer::SessionDelete(uint64_t ID)
     }
 }
 
-void ZNDNet::SrvSessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
-{
-    if (!ses || !dat)
-        return;
 
-    if (SDL_LockMutex(sendPktListMutex) == 0)
-    {
-        for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
-        {
-            NetUser *usr = *it;
-            if (usr && usr != from && usr->net && usr->IsOnline())
-            {
-                SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, flags);
-                dta->SetChannel(usr->__idx, chnl);
-                sendPktList.push_back(dta);
-            }
-        }
-        SDL_UnlockMutex(sendPktListMutex);
-    }
-}
 
 void ZNDServer::SessionListUsers(NetUser *usr)
 {
@@ -212,27 +192,14 @@ void ZNDServer::SessionErrSend(NetUser *usr, uint8_t code)
     Send_PushData(snd);
 }
 
-bool ZNDNet::SessionCheckName(const std::string &name)
+
+void ZNDServer::SessionClear()
 {
-    if (name.size() > SES_NAME_MAX)
-        return false;
+    for(NetSessionMap::iterator it = sessions.begin() ; it != sessions.end(); it++)
+        delete it->second;
 
-    std::regex re("[[:alnum:]][[:print:]]+[[:graph:]]" );
-
-    if ( std::regex_match (name,  re) )
-        return true;
-
-    return false;
+    sessions.clear();
 }
 
-bool ZNDNet::SessionCheckPswd(const std::string &pswd)
-{
-    std::regex re("[[:graph:]]{4,16}");
-
-    if ( std::regex_match (pswd,  re) )
-        return true;
-
-    return false;
-}
 
 }

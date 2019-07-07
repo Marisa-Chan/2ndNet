@@ -123,6 +123,7 @@ protected:
     //For receive thread
     void Recv_PushInRaw(InRawPkt *inpkt);
     InRawPkt *Recv_PopInRaw();
+    void Recv_Clear();
 
     //For sending thread
     void Send_PushData(SendingData *data);

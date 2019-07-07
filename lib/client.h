@@ -8,39 +8,10 @@
 namespace ZNDNet
 {
 
-struct SessionInfo
-{
-    uint64_t    ID;
-    std::string name;
-    bool        pass;
-    uint32_t    players;
-    uint32_t    max_players;
-
-    SessionInfo& operator= (const SessionInfo& x)
-    {
-        ID = x.ID;
-        name = x.name;
-        pass = x.pass;
-        players = x.players;
-        max_players = x.max_players;
-        return *this;
-    };
-};
-typedef std::vector<SessionInfo> SessionInfoVect;
-
-
-
-
-
-
-
-
-
 class ZNDClient: public ZNDNet
 {
 public:
     ZNDClient(const std::string &servstring);
-    ~ZNDClient();
 
     //Client methods
     void Start(const std::string &name, const IPaddress &addr);
@@ -67,11 +38,6 @@ public:
 
     void ShowSession(bool show);
 
-    /*Event *Events_Pop();
-    void   Events_ClearByType(uint32_t type);
-    void   Events_Clear();
-    Event *Events_PeekByType(uint32_t type);
-    Event *Events_WaitForMsg(uint32_t type, uint32_t time = 0);*/
 protected:
 
     Pkt *Recv_PreparePacket(InRawPkt *pkt);

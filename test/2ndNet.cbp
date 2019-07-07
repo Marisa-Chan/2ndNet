@@ -32,38 +32,38 @@
 			<Add option="-Wall" />
 			<Add option="-fexceptions" />
 			<Add option="-Wno-unused-function" />
+			<Add directory="../lib/" />
 		</Compiler>
 		<Linker>
 			<Add library="SDL2" />
 			<Add library="SDL2_net" />
 		</Linker>
-		<Unit filename="addrseq.h" />
-		<Unit filename="client.cpp" />
-		<Unit filename="client.h" />
-		<Unit filename="client_threads.cpp" />
-		<Unit filename="errcode.h" />
-		<Unit filename="events.h" />
-		<Unit filename="inpacket.h" />
+		<Unit filename="../lib/addrseq.h" />
+		<Unit filename="../lib/client.cpp" />
+		<Unit filename="../lib/client.h" />
+		<Unit filename="../lib/client_threads.cpp" />
+		<Unit filename="../lib/errcode.h" />
+		<Unit filename="../lib/events.h" />
+		<Unit filename="../lib/inpacket.h" />
+		<Unit filename="../lib/netsession.h" />
+		<Unit filename="../lib/netuser.h" />
+		<Unit filename="../lib/sendstorage.h" />
+		<Unit filename="../lib/server.cpp" />
+		<Unit filename="../lib/server.h" />
+		<Unit filename="../lib/server_session.cpp" />
+		<Unit filename="../lib/server_threads.cpp" />
+		<Unit filename="../lib/single.cpp" />
+		<Unit filename="../lib/single.h" />
+		<Unit filename="../lib/single_threads.cpp" />
+		<Unit filename="../lib/tick.h" />
+		<Unit filename="../lib/types.h" />
+		<Unit filename="../lib/utils.h" />
+		<Unit filename="../lib/zndNet.cpp" />
+		<Unit filename="../lib/zndNet.h" />
+		<Unit filename="Kbhit.h" />
+		<Unit filename="crc32.cpp" />
+		<Unit filename="crc32.h" />
 		<Unit filename="main.cpp" />
-		<Unit filename="netsession.h" />
-		<Unit filename="netuser.h" />
-		<Unit filename="reciever.cpp" />
-		<Unit filename="sender.cpp" />
-		<Unit filename="sendstorage.h" />
-		<Unit filename="server.cpp" />
-		<Unit filename="server.h" />
-		<Unit filename="server_threads.cpp" />
-		<Unit filename="session.cpp" />
-		<Unit filename="single.cpp" />
-		<Unit filename="single.h" />
-		<Unit filename="single_threads.cpp" />
-		<Unit filename="test/crc32.cpp" />
-		<Unit filename="test/crc32.h" />
-		<Unit filename="tick.h" />
-		<Unit filename="types.h" />
-		<Unit filename="utils.h" />
-		<Unit filename="zndNet.cpp" />
-		<Unit filename="zndNet.h" />
 		<Extensions>
 			<code_completion>
 				<search_path add="/usr/include/" />

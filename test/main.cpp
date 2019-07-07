@@ -3,7 +3,7 @@
 
 #include <unistd.h>
 #include "Kbhit.h"
-#include "test/crc32.h"
+#include "crc32.h"
 
 
 #if !defined(SEPARATE_TEST_CLIENT) && !defined(SEPARATE_TEST_SERVER) && !defined(SEPARATE_TEST_SINGLE)
@@ -345,6 +345,8 @@ int main(int argc, const char *argv[])
     client->SendDisconnect();
     client->Stop();
 
+    delete client;
+
     sleep(4);
 
 
@@ -524,6 +526,8 @@ int main()
 
         SDL_Delay(10);
     }
+
+    delete serv;
     //sleep(600);
 
 

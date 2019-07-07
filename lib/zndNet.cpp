@@ -1,12 +1,9 @@
 #include "zndNet.h"
+#include <regex>
+
 
 namespace ZNDNet
 {
-
-
-
-
-
 
 ZNDNet::ZNDNet(const std::string &servstring)
 {
@@ -26,13 +23,7 @@ ZNDNet::ZNDNet(const std::string &servstring)
     //confirmPktList.clear();
     confirmQueueMutex = SDL_CreateMutex();
 
-
-
-
-
     eSyncMutex = SDL_CreateMutex();
-
-
 
     eEventMutex = SDL_CreateMutex();
     eEventDataSize = 0;
@@ -44,11 +35,17 @@ ZNDNet::ZNDNet(const std::string &servstring)
 
 ZNDNet::~ZNDNet()
 {
+    Stop();
 
+    Events_Clear();
+
+    SDL_DestroyMutex(recvPktListMutex);
+    SDL_DestroyMutex(sendPktListMutex);
+    SDL_DestroyMutex(confirmQueueMutex);
+    SDL_DestroyMutex(eSyncMutex);
+    SDL_DestroyMutex(eEventMutex);
+    SDL_DestroyMutex(sendModifyMutex);
 }
-
-
-
 
 
 
@@ -95,7 +92,6 @@ void ZNDNet::ConfirmQueueCheck()
         {
             if ( SDL_LockMutex(confirmQueueMutex) == 0 )
             {
-                //printf("Confirm (%d) [%d] timeout!\n", mode,dta->addr.seq);
                 it = confirmQueue.erase(it);
                 SDL_UnlockMutex(confirmQueueMutex);
 
@@ -122,7 +118,6 @@ void ZNDNet::PendingCheck()
                 if (!upto)
                 {
                     it = pendingPkt.erase(it);
-                    //printf("Pending %d (%d)\n", pkt->ipseq.seq, (uint32_t)pkt->parts.size());
                     delete pkt;
                 }
                 else
@@ -135,7 +130,6 @@ void ZNDNet::PendingCheck()
             else
             {
                 it = pendingPkt.erase(it);
-                //printf("Pending! %d (%d)\n", pkt->ipseq.seq, (uint32_t)pkt->parts.size());
                 delete pkt;
             }
         }
@@ -153,7 +147,6 @@ void ZNDNet::ConfirmReceive(AddrSeq _seq)
         {
             if ( SDL_LockMutex(confirmQueueMutex) == 0 )
             {
-                //printf("Confirm (%d) [%d] received, delete it! %d\n", mode,dta->addr.seq, (int)ttime.GetTicks());
                 it = confirmQueue.erase(it);
                 SDL_UnlockMutex(confirmQueueMutex);
 
@@ -183,7 +176,6 @@ void ZNDNet::ConfirmRetry(AddrSeq _seq, uint32_t from, uint32_t to)
                     it = confirmQueue.erase(it);
                     SDL_UnlockMutex(confirmQueueMutex);
 
-                    //printf("Retry %d: \t%d -> %d\n", dta->addr.seq, from, to);
                     Send_RetryData(dta, from, to, false);
                 }
             }
@@ -224,16 +216,12 @@ void ZNDNet::Events_Push(Event *evnt)
 
     if (evnt->size >= EVENTS_DATA_MAX)
     {
-        printf("Event (%d) msg too big\n", evnt->type);
         delete evnt;
         return;
     }
 
     if (SDL_LockMutex(eEventMutex) == 0)
     {
-        if (eEventList.size() >= EVENTS_MAX || (eEventDataSize + evnt->size) >= EVENTS_DATA_MAX)
-            printf("Events overflow num(%d) sz(%d) add(type %d)(sz %d)!\n", (int)eEventList.size(), eEventDataSize, evnt->type, evnt->size);
-
         while (eEventList.size() >= EVENTS_MAX || (eEventDataSize + evnt->size) >= EVENTS_DATA_MAX)
         {
             Event *tmp = eEventList.front();
@@ -285,6 +273,7 @@ void ZNDNet::Events_ClearByType(uint32_t type)
             Event *evt = *it;
             if (evt->type == type)
             {
+                eEventDataSize -= evt->size;
                 it = eEventList.erase(it);
                 delete evt;
             }
@@ -299,11 +288,14 @@ void ZNDNet::Events_Clear()
 {
     if (SDL_LockMutex(eEventMutex) == 0)
     {
-        for(EventList::iterator it = eEventList.begin(); it != eEventList.end();)
-        {
+        for(EventList::iterator it = eEventList.begin(); it != eEventList.end(); it = eEventList.erase(it))
             delete (*it);
-            it = eEventList.erase(it);
-        }
+
+        eEventDataSize = 0;
+
+        if (eEventWaitLock == 0) //Check No wait functions
+            eEventNextID = 0; //Clear ID for avoid overflow
+
         SDL_UnlockMutex(eEventMutex);
     }
 }
@@ -317,6 +309,8 @@ Event *ZNDNet::Events_PeekByType(uint32_t type)
             Event *evt = *it;
             if (evt->type == type)
             {
+                eEventDataSize -= evt->size;
+
                 eEventList.erase(it);
                 SDL_UnlockMutex(eEventMutex);
 
@@ -341,6 +335,7 @@ Event *ZNDNet::Events_WaitForMsg(uint32_t type, uint32_t time)
             Event *evt = *it;
             if (evt->type == type)
             {
+                eEventDataSize -= evt->size;
                 eEventList.erase(it);
                 eEventWaitLock--;
                 SDL_UnlockMutex(eEventMutex);
@@ -369,6 +364,7 @@ Event *ZNDNet::Events_WaitForMsg(uint32_t type, uint32_t time)
                     Event *evt = *it;
                     if (evt->type == type)
                     {
+                        eEventDataSize -= evt->size;
                         eEventList.erase(it);
                         eEventWaitLock--;
                         SDL_UnlockMutex(eEventMutex);
@@ -637,5 +633,165 @@ RefData *ZNDNet::SrvDataGenUserLeave(NetUser *usr, uint8_t type)
     dat->writeU8(type);
     return dat;
 }
+
+void ZNDNet::SrvSessionBroadcast(NetSession *ses, RefData *dat, uint8_t flags, uint8_t chnl, NetUser *from)
+{
+    if (!ses || !dat)
+        return;
+
+    if (SDL_LockMutex(sendPktListMutex) == 0)
+    {
+        for(NetUserList::iterator it = ses->users.begin(); it != ses->users.end(); it++)
+        {
+            NetUser *usr = *it;
+            if (usr && usr != from && usr->net && usr->IsOnline())
+            {
+                SendingData *dta = new SendingData(usr->addr, usr->GetSeq(), dat, flags);
+                dta->SetChannel(usr->__idx, chnl);
+                sendPktList.push_back(dta);
+            }
+        }
+        SDL_UnlockMutex(sendPktListMutex);
+    }
+}
+
+bool ZNDNet::SessionCheckName(const std::string &name)
+{
+    if (name.size() > SES_NAME_MAX)
+        return false;
+
+    std::regex re("[[:alnum:]][[:print:]]+[[:graph:]]" );
+
+    if ( std::regex_match (name,  re) )
+        return true;
+
+    return false;
+}
+
+bool ZNDNet::SessionCheckPswd(const std::string &pswd)
+{
+    std::regex re("[[:graph:]]{4,16}");
+
+    if ( std::regex_match (pswd,  re) )
+        return true;
+
+    return false;
+}
+
+
+
+
+void ZNDNet::Recv_PushInRaw(InRawPkt *inpkt)
+{
+    if (SDL_LockMutex(recvPktListMutex) == 0)
+    {
+        recvPktList.push_back(inpkt);
+        SDL_UnlockMutex(recvPktListMutex);
+    }
+}
+
+
+InRawPkt *ZNDNet::Recv_PopInRaw()
+{
+    InRawPkt *ret = NULL;
+
+    if (SDL_LockMutex(recvPktListMutex) == 0)
+    {
+        if (!recvPktList.empty())
+        {
+            ret = recvPktList.front();
+            recvPktList.pop_front();
+        }
+
+        SDL_UnlockMutex(recvPktListMutex);
+    }
+
+    return ret;
+}
+
+void ZNDNet::Send_PushData(SendingData *data)
+{
+    if (!data)
+        return;
+
+    if (SDL_LockMutex(sendPktListMutex) == 0)
+    {
+        sendPktList.push_back(data);
+        SDL_UnlockMutex(sendPktListMutex);
+    }
+}
+
+void ZNDNet::Send_RetryData(SendingData *data, size_t from, size_t to, bool decr)
+{
+    if (!data)
+        return;
+
+    if (decr)
+    {
+        if (data->tr_cnt > 0)
+            data->tr_cnt--;
+    }
+
+
+    if (from >= data->pdata->size() || to > data->pdata->size() || (to != 0 && to < from) )
+    {
+        delete data;
+        return;
+    }
+
+    data->sended = from;
+    data->retryUpTo = to;
+
+    Send_PushData(data);
+}
+
+
+
+
+void ZNDNet::Send_Clear(const IPaddress &addr)
+{
+    if (SDL_LockMutex(sendModifyMutex) == 0)
+    {
+        for (SendingList::iterator it = sendPktList.begin(); it != sendPktList.end(); )
+        {
+            SendingData* dta = (*it);
+            if ( IPCMP(dta->addr.addr, addr) )
+            {
+                delete dta;
+                it = sendPktList.erase(it);
+            }
+            else
+                it++;
+        }
+
+        SDL_UnlockMutex(sendModifyMutex);
+    }
+}
+
+void ZNDNet::Send_Clear()
+{
+    if (SDL_LockMutex(sendModifyMutex) == 0)
+    {
+        for (SendingList::iterator it = sendPktList.begin(); it != sendPktList.end(); it = sendPktList.erase(it))
+            delete *it;
+
+        SDL_UnlockMutex(sendModifyMutex);
+    }
+}
+
+void ZNDNet::Recv_Clear()
+{
+    if (SDL_LockMutex(recvPktListMutex) == 0)
+    {
+        if (!recvPktList.empty())
+        {
+            delete recvPktList.front();
+            recvPktList.pop_front();
+        }
+
+        SDL_UnlockMutex(recvPktListMutex);
+    }
+}
+
 
 };

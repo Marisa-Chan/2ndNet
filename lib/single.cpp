@@ -78,8 +78,8 @@ Pkt *ZNDSingle::Recv_PreparePacket(InRawPkt *pkt)
 
             if ( parted->Feed(pkt, ttime.GetTicks()) ) // Is complete?
             {
-                if (parted->retry != RETRY_GARANT)
-                    printf("Recovered packet! %d\n", parted->ipseq.seq);
+                /*if (parted->retry != RETRY_GARANT)
+                    printf("Recovered packet! %d\n", parted->ipseq.seq);*/
                 pendingPkt.remove(parted);
                 return new Pkt(parted, from);
             }
@@ -116,11 +116,6 @@ void ZNDSingle::ProcessSystemPkt(Pkt* pkt)
         {
             uint8_t servstrSz = rd.readU8();
             uint8_t namestrSz = rd.readU8();
-
-            printf("HANDSHAKE %d %d %d\n", servstrSz, namestrSz, (int)pkt->datasz);
-                //for (int i = 0; i < pkt->hdr.datasz; i++)
-                //    printf("%2.2x", pkt->hdr.data[i]);
-                //putc('\n', stdout);
 
             if (namestrSz == 0 || servstrSz == 0 ||
                ((size_t)namestrSz + (size_t)servstrSz + 2) != rd.size() ||
@@ -335,7 +330,6 @@ void ZNDSingle::InterprocessUpdate()
             {
                 if (curTime > usr->pongTime + TIMEOUT_USER)
                 {
-                    printf("Timeout player %s\n", usr->name.c_str());
                     DisconnectUser(usr, 1);
 
                     it = users.erase(it);

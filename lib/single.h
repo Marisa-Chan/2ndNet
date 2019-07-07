@@ -9,7 +9,6 @@ class ZNDSingle: public ZNDNet
 {
 public:
     ZNDSingle(const std::string &servstring);
-    ~ZNDSingle();
 
     void Start(const std::string &name, uint16_t port, const std::string &sname, uint32_t max_players);
 

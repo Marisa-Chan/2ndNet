@@ -227,11 +227,12 @@ int ZNDSingle::_UpdateThread(void *data)
 
             pktsRecv++;
 
-            Pkt * pkt = _this->Recv_PreparePacket(ipkt);
-            if (pkt)
+            if (SDL_LockMutex(_this->eSyncMutex) == 0)
             {
-                if (SDL_LockMutex(_this->eSyncMutex) == 0)
+                Pkt * pkt = _this->Recv_PreparePacket(ipkt);
+                if (pkt)
                 {
+
                     if (pkt->flags & PKT_FLAG_SYSTEM)
                         _this->ProcessSystemPkt(pkt);
                     else
@@ -241,10 +242,10 @@ int ZNDSingle::_UpdateThread(void *data)
 
                         _this->ProcessRegularPkt(pkt);
                     }
-                    SDL_UnlockMutex(_this->eSyncMutex);
 
                     delete pkt;
                 }
+                SDL_UnlockMutex(_this->eSyncMutex);
             }
         }
 
@@ -266,9 +267,12 @@ int ZNDSingle::_UpdateThread(void *data)
     _this->recvThread = NULL;
     _this->sendThread = NULL;
 
+    _this->ME.status = NetUser::STATUS_DISCONNECTED;
+
     _this->Send_Clear();
     _this->Confirm_Clear();
     _this->Pending_Clear();
+    _this->Recv_Clear();
 
     SDLNet_UDP_Close(_this->sock);
 

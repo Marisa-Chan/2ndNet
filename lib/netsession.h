@@ -3,6 +3,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "netuser.h"
 
@@ -66,6 +67,27 @@ struct NetSession
 };
 
 typedef std::unordered_map<uint64_t, NetSession *> NetSessionMap;
+
+
+struct SessionInfo
+{
+    uint64_t    ID;
+    std::string name;
+    bool        pass;
+    uint32_t    players;
+    uint32_t    max_players;
+
+    SessionInfo& operator= (const SessionInfo& x)
+    {
+        ID = x.ID;
+        name = x.name;
+        pass = x.pass;
+        players = x.players;
+        max_players = x.max_players;
+        return *this;
+    };
+};
+typedef std::vector<SessionInfo> SessionInfoVect;
 
 };
 
