@@ -113,6 +113,18 @@ public:
 
     void   Stop(); // Don't call it from internal threads!
 
+    virtual void ShowSession(bool show) = 0;
+    virtual void CloseSession(uint32_t closeTime) = 0;
+
+    virtual void KickUser(uint64_t _ID) = 0;
+
+    virtual bool GetUsers(UserInfoVect &dst) = 0;
+    virtual bool GetUser(UserInfo &dst, const char *name) = 0;
+    virtual bool GetUser(UserInfo &dst, uint64_t _ID) = 0;
+
+    virtual void SendData(uint64_t to, void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR) = 0;
+    virtual void BroadcastData(void *data, uint32_t sz, uint8_t flags = 0, uint8_t channel = CHANNEL_USR) = 0;
+
 
     bool SessionCheckName(const std::string &name);
     bool SessionCheckPswd(const std::string &pswd);
